@@ -1,0 +1,106 @@
+{
+  "theme": "Light Theme - 'Warm & Organic Utility'",
+  "typography": {
+    "pairing_archetype": "Soft Utility",
+    "headings": {
+      "font": "Manrope",
+      "import_url": "https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap",
+      "rules": "Tight letter spacing (tracking-tight) for H1-H2. H1 max size text-5xl. Use Manrope for friendly yet functional headers."
+    },
+    "body": {
+      "font": "IBM Plex Sans",
+      "import_url": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap",
+      "rules": "Loose leading (leading-relaxed) for body text. IBM Plex Sans brings technical clarity to the dashboard."
+    },
+    "labels": {
+      "rules": "Uppercase, tiny, wide spacing (tracking-[0.2em]) for overlines and cutoff time indicators."
+    }
+  },
+  "colors": {
+    "archetype": "Organic & Earthy",
+    "palette": {
+      "background": "210 20% 98%",
+      "foreground": "30 10% 15%",
+      "card": "0 0% 100%",
+      "card_foreground": "30 10% 15%",
+      "primary": "14 55% 51%",
+      "primary_foreground": "0 0% 100%",
+      "secondary": "101 15% 48%",
+      "secondary_foreground": "0 0% 100%",
+      "muted": "40 15% 92%",
+      "muted_foreground": "30 10% 45%",
+      "border": "40 15% 90%",
+      "accent": "40 20% 95%",
+      "accent_foreground": "30 10% 15%",
+      "destructive": "4 70% 55%",
+      "destructive_foreground": "0 0% 100%",
+      "ring": "14 55% 51%"
+    },
+    "rules": "No pure black or pure white without a tint. Backgrounds have a warm stone/sand tint. Use primary Terracotta (#C65A40) for general actions and Dinner, and Moss Green (#748C69) for Breakfast. Never use fully transparent backgrounds for overlays."
+  },
+  "visual_enhancers": {
+    "surfaces": "Tactile mix with Grid Borders. 1px solid border on cards (border-border) with flat background. Add subtle shadow-sm on hover to lift cards slightly.",
+    "glassmorphism": "Avoid in this app to keep it warm and grounded. Use solid backgrounds for headers and modals.",
+    "shadows": "Ambient + direct shadows for floating elements like dropdowns. Dashboard cards should remain mostly flat with sharp borders."
+  },
+  "grids_and_layouts": {
+    "spacing": "Generous spacing system. Use p-6 or p-8 inside cards. Use gap-6 or gap-8 in grids.",
+    "dashboard_grid": "High Density Bento Grid. Base grid-cols-1 md:grid-cols-3 lg:grid-cols-4. Data correlation requires proximity, but generous padding inside cells keeps it breathable.",
+    "alignment": "Left-align forms, tabular data, and key metrics. Optical alignment over geometrical. Subgrids should be used if needed to align card footers."
+  },
+  "components": {
+    "buttons": "Pill-shaped (rounded-full) or smooth rounded (rounded-xl) to feel approachable. Active/hover states must have higher contrast and slight scale effect (active:scale-95).",
+    "cards": "Subtle border (1px), rounded-xl, flat background. No heavy drop shadows by default.",
+    "tables": "Use Shadcn UI tables customized with generous row padding (py-4) and subtle bottom borders. Make sure column headers are distinct.",
+    "navigation": "Visible sidebar or top nav with solid background. Do not hide behind a hamburger menu on desktop."
+  },
+  "motion": {
+    "rules": "Micro-interactions for feedback. Hover states on all buttons and cards. Smooth transitions for modal/dialog opening.",
+    "transitions": "Use specific properties: transition-colors duration-200, transition-transform duration-200. NO transition-all."
+  },
+  "accessibility": {
+    "contrast": "Ensure text contrast meets APCA/WCAG standards. Use dark espresso text over warm backgrounds.",
+    "focus": "Clear focus rings (focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background) on all interactive elements.",
+    "testing": "All interactive and key informational elements MUST have data-testid attributes (e.g., data-testid='book-breakfast-button')."
+  },
+  "media": {
+    "icons": {
+      "library": "@phosphor-icons/react",
+      "installation": "yarn add @phosphor-icons/react",
+      "usage": "Use Duotone or Regular weights. Excellent for warm, friendly internal tools without looking like generic corporate SaaS."
+    },
+    "images": {
+      "breakfast_banner": {
+        "url": "https://images.unsplash.com/photo-1738605488100-913d2c8b5c4f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwzfHxjYWZldGVyaWElMjBicmVha2Zhc3QlMjBmb29kJTIwY29mZmVlJTIwdHJheXxlbnwwfHx8fDE3ODQ3NDM4ODh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Close up of food on tray. Use for auth page side panel or breakfast dashboard header."
+      },
+      "dinner_banner": {
+        "url": "https://images.pexels.com/photos/30485896/pexels-photo-30485896.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Warm dinner setting. Use for auth page side panel or dinner dashboard header."
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Inject the font import URLs into the index.html or global css.",
+    "Use Shadcn UI for forms, inputs, selects, dialogs, cards, and tables. Do not build these complex components from scratch.",
+    "Update the tailwind.config.js with the provided HSL color variables mapping to the 'Organic & Earthy' palette.",
+    "Create a login and signup flow (Employee Number + Password).",
+    "Create an Employee Dashboard: prominently display cards for booking Today's Dinner and Tomorrow's Breakfast. Clearly mark cutoff times (11:30 PM for breakfast next day, 2:30 PM for dinner same day).",
+    "Include a stats section on the Employee Dashboard showing the total number of breakfast and dinner meals consumed in the current month.",
+    "Include a simple booking history table or calendar view.",
+    "Create an Admin Dashboard displaying total bookings for today, a list of employees, and a date-range filter with an 'Export to Excel' action.",
+    "Ensure the application layout feels welcoming, using generous spacing and the defined typography system.",
+    "Implement the UI using pure React, Tailwind CSS, and Shadcn UI. Ensure responsive design (mobile-first)."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do not converge toward generic 'AI slop'. Make creative, distinctive frontends that surprise and delight.",
+    "Never apply universal transition (transition: all). This breaks transforms. Use specific transitions.",
+    "DO NOT center align the app container (.App { text-align: center; }). This disrupts reading flow.",
+    "Always use modern button styles (pill-shaped or sharp) with interaction animations.",
+    "Never use AI assistant emoji characters for icons.",
+    "Add micro-animations (hover states, transitions) to all interactions.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Use sonner for toast notifications. Do not build custom toast.",
+    "All interactive elements MUST include a data-testid attribute for robust automated testing."
+  ]
+}
