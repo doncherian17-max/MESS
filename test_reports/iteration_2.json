@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 2 testing: 24/25 backend tests pass. 1 backend BUG found (reset-password always returns 400 due to timezone mishandling). All frontend flows verified: admin login/dashboard tabs, chef creation & role-based redirect, chef dashboard, employee signup, holiday blocks booking, menu shown to employee, theme toggle, change password + re-login, forgot password success message, audit logs, email report endpoint. Excel export and prior CRUD still work.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/reset-password",
+        "issue": "Always returns 400 'Reset link has expired' even with a fresh valid token. RCA: forgot_password stores tz-aware datetime (now_local()+1h in Asia/Kolkata) but Motor/MongoDB persists it as naive UTC datetime. In reset_password, code does `expires_at.replace(tzinfo=TZ)` on the naive value, effectively treating the UTC timestamp as Kolkata time. This makes the expiry appear ~5:30h in the past. Fix: in reset_password interpret naive stored datetime as UTC, i.e. `expires_at = expires_at.replace(tzinfo=timezone.utc)` (then optionally .astimezone(TZ)).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/new_features.xml"
+  ],
+  "action_items": [
+    "Fix reset-password expiry timezone comparison in /app/backend/server.py (reset_password endpoint): naive datetimes read from Mongo must be interpreted as UTC, not TZ (Asia/Kolkata). E.g. `if expires_at.tzinfo is None: expires_at = expires_at.replace(tzinfo=timezone.utc)`. Once fixed, rerun test_reset_password_flow to verify."
+  ],
+  "critical_code_review_comments": [
+    "server.py stores `expires_at` as tz-aware datetime but Motor serializes to BSON naive UTC — reading back and calling `.replace(tzinfo=TZ)` is incorrect. Same pattern would also apply to other places if datetimes are ever queried by expiry.",
+    "AdminDashboard.jsx (>700 lines suggested) not verified for size but multi-tab layout is reasonable; consider extracting each tab into its own component for maintainability.",
+    "PATCH /api/bookings/{id}: when body is empty (no quantity/booking_type), endpoint currently returns {ok: true} without updates or 400. Consider validating at least one field.",
+    "TTL index on password_reset_tokens uses expireAfterSeconds=3600 but with expires_at values in the future — TTL indexes on expires_at should use expireAfterSeconds=0 to expire exactly at the timestamp (current setup will delete 1h after the expires_at, so tokens live ~2h)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py (created)"
+  ],
+  "success_rate": {
+    "backend": "96% (24/25)",
+    "frontend": "100% of tested flows"
+  },
+  "test_credentials": "Admin 626586 / admin@123. Test users created dynamically with random suffixes (cleanup runs at end of pytest module).",
+  "seed_data_creation": "During run: dynamically created holiday for tomorrow (later deleted), menu for date+5, chef and employee accounts with random suffix (cleaned up). Some audit log entries remain — by design.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend has one confirmed bug in reset-password timezone handling. Frontend forgot/reset UI flow itself works (forgot returns success, reset page renders); the reset submit will fail with 400 until backend fix is applied. After fix, re-run: `python -m pytest /app/backend/tests/test_new_features.py::TestPasswordFlows -v -o addopts=''`. Note: pytest.ini uses xdist with loadscope; the module-scoped `test_cleanup_created_users` may race with class tests — best to run PasswordFlows before cleanup or move cleanup to a session-scoped teardown fixture. Excel export and old CRUD still verified via existing backend_test.py.",
+  "rca of the issue": "reset-password 400: `forgot_password` writes `expires_at = now_local() + 1h` (Asia/Kolkata tz-aware). Motor/PyMongo converts tz-aware dt to UTC then stores as naive BSON datetime. On read, `rec['expires_at']` has `tzinfo=None`. Code does `expires_at.replace(tzinfo=TZ)` — this labels a UTC clock reading as Kolkata (UTC+5:30), which is 5.5h earlier than the true instant. `now_local() > expires_at` therefore becomes true immediately, and the endpoint raises 400 'Reset link has expired'. Fix: replace with `timezone.utc` (or convert `now_local()` to UTC before comparing)."
+}

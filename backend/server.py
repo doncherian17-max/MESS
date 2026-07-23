@@ -1,89 +1,1072 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+import os
+import io
+import logging
+import secrets
+from datetime import datetime, timedelta, date as date_cls
+from typing import List, Optional, Literal
 
-# Create the main app without a prefix
-app = FastAPI()
+from zoneinfo import ZoneInfo
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+import bcrypt
+import jwt
+import httpx
+from bson import ObjectId
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Request, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, EmailStr
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+
+# ---------------- Config ----------------
+MONGO_URL = os.environ["MONGO_URL"]
+DB_NAME = os.environ["DB_NAME"]
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALG = "HS256"
+ACCESS_TOKEN_MIN = 60 * 24 * 7
+TZ = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Kolkata"))
+APP_URL = os.environ.get("APP_URL", "").rstrip("/")
+
+BREAKFAST_CUTOFF_HOUR = 23
+BREAKFAST_CUTOFF_MIN = 30
+DINNER_CUTOFF_HOUR = 14
+DINNER_CUTOFF_MIN = 30
+
+MAX_QTY = 5
+
+# Email
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "MessBook")
+
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+app = FastAPI(title="MessBook API")
+api = APIRouter(prefix="/api")
+bearer = HTTPBearer(auto_error=False)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("mess")
+
+Role = Literal["employee", "admin", "chef"]
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# ---------------- Helpers ----------------
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_token(user_id: str, employee_number: str, role: str) -> str:
+    payload = {
+        "sub": user_id,
+        "emp": employee_number,
+        "role": role,
+        "exp": datetime.now(tz=TZ) + timedelta(minutes=ACCESS_TOKEN_MIN),
+        "type": "access",
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def now_local() -> datetime:
+    return datetime.now(tz=TZ)
+
+
+def parse_iso_date(s: str) -> date_cls:
+    return date_cls.fromisoformat(s)
+
+
+def user_public(u: dict) -> dict:
+    return {
+        "id": str(u["_id"]),
+        "employee_number": u["employee_number"],
+        "name": u.get("name", ""),
+        "email": u.get("email"),
+        "role": u.get("role", "employee"),
+        "created_at": u.get("created_at"),
+    }
+
+
+def compute_cutoff(meal_type: str, meal_date: date_cls) -> datetime:
+    if meal_type == "breakfast":
+        cutoff_day = meal_date - timedelta(days=1)
+        return datetime(cutoff_day.year, cutoff_day.month, cutoff_day.day,
+                        BREAKFAST_CUTOFF_HOUR, BREAKFAST_CUTOFF_MIN, tzinfo=TZ)
+    return datetime(meal_date.year, meal_date.month, meal_date.day,
+                    DINNER_CUTOFF_HOUR, DINNER_CUTOFF_MIN, tzinfo=TZ)
+
+
+async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict] = None):
+    try:
+        await db.audit_logs.insert_one({
+            "actor_id": str(actor.get("_id", "")) if actor else "",
+            "actor_employee_number": actor.get("employee_number", "") if actor else "",
+            "actor_role": actor.get("role", "") if actor else "",
+            "action": action,
+            "target": target,
+            "meta": meta or {},
+            "timestamp": now_local().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"audit log failed: {e}")
+
+
+async def send_email_async(to: str, subject: str, html: str) -> bool:
+    if not EMAIL_KEY:
+        logger.warning("EMERGENT_EMAIL_KEY missing — skipping email send")
+        return False
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        return False
+
+
+# ---------------- Models ----------------
+class RegisterIn(BaseModel):
+    employee_number: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=4, max_length=128)
+    email: Optional[EmailStr] = None
+
+
+class LoginIn(BaseModel):
+    employee_number: str
+    password: str
+
+
+class AdminCreateEmployeeIn(BaseModel):
+    employee_number: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=4, max_length=128)
+    email: Optional[EmailStr] = None
+    role: Literal["employee", "admin", "chef"] = "employee"
+
+
+class BookingIn(BaseModel):
+    meal_type: Literal["breakfast", "dinner"]
+    meal_date: str
+    quantity: int = Field(default=1, ge=1, le=MAX_QTY)
+    booking_type: Literal["dine_in", "parcel"] = "dine_in"
+
+
+class BookingUpdateIn(BaseModel):
+    quantity: Optional[int] = Field(default=None, ge=1, le=MAX_QTY)
+    booking_type: Optional[Literal["dine_in", "parcel"]] = None
+
+
+class UpdateMeIn(BaseModel):
+    email: Optional[EmailStr] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=4, max_length=128)
+
+
+class ForgotPasswordIn(BaseModel):
+    employee_number: str
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str = Field(min_length=4, max_length=128)
+
+
+class HolidayIn(BaseModel):
+    date: str
+    name: str = Field(min_length=1, max_length=100)
+    applies_to: Literal["breakfast", "dinner", "both"] = "both"
+
+
+class MenuIn(BaseModel):
+    date: str
+    meal_type: Literal["breakfast", "dinner"]
+    items: List[str] = Field(default_factory=list)
+
+
+class EmailReportIn(BaseModel):
+    email: EmailStr
+    from_date: str
+    to_date: str
+
+
+# ---------------- Auth ----------------
+async def get_current_user(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+) -> dict:
+    token = None
+    if creds and creds.scheme.lower() == "bearer":
+        token = creds.credentials
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+async def get_chef_or_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") not in ("chef", "admin"):
+        raise HTTPException(status_code=403, detail="Chef/Admin access required")
+    return user
+
+
+# ---------------- Auth endpoints ----------------
+@api.post("/auth/register")
+async def register(body: RegisterIn):
+    emp = body.employee_number.strip()
+    existing = await db.users.find_one({"employee_number": emp})
+    if existing:
+        raise HTTPException(status_code=400, detail="Employee number already registered")
+    doc = {
+        "employee_number": emp,
+        "name": body.name.strip(),
+        "email": body.email.lower() if body.email else None,
+        "password_hash": hash_password(body.password),
+        "role": "employee",
+        "created_at": now_local().isoformat(),
+    }
+    res = await db.users.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    token = create_token(str(res.inserted_id), emp, "employee")
+    await audit(doc, "user.register", target=emp)
+    return {"token": token, "user": user_public(doc)}
+
+
+@api.post("/auth/login")
+async def login(body: LoginIn):
+    emp = body.employee_number.strip()
+    user = await db.users.find_one({"employee_number": emp})
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid employee number or password")
+    token = create_token(str(user["_id"]), emp, user.get("role", "employee"))
+    return {"token": token, "user": user_public(user)}
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user_public(user)
+
+
+@api.patch("/auth/me")
+async def update_me(body: UpdateMeIn, user: dict = Depends(get_current_user)):
+    updates = {}
+    if body.email is not None:
+        updates["email"] = body.email.lower()
+    if body.name is not None:
+        updates["name"] = body.name.strip()
+    if updates:
+        await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
+        user.update(updates)
+        # Also propagate name to booking snapshots (for future exports we already store snapshot, but no need to backfill)
+    return user_public(user)
+
+
+@api.post("/auth/change-password")
+async def change_password(body: ChangePasswordIn, user: dict = Depends(get_current_user)):
+    if not verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(body.new_password)}})
+    await audit(user, "user.change_password")
+    return {"ok": True}
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn, background: BackgroundTasks):
+    emp = body.employee_number.strip()
+    user = await db.users.find_one({"employee_number": emp})
+    # Generic response — do not leak whether the user exists
+    if user and user.get("email"):
+        token = secrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "user_id": str(user["_id"]),
+            "token": token,
+            "expires_at": now_local() + timedelta(hours=1),
+            "used": False,
+        })
+        base = APP_URL or ""
+        reset_link = f"{base}/reset-password?token={token}"
+        html = f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #faf7f2; padding: 32px 0;">
+          <tr><td align="center">
+            <table width="480" cellpadding="0" cellspacing="0" style="background: white; border: 1px solid #e7ddd0; border-radius: 12px; padding: 32px;">
+              <tr><td>
+                <h2 style="margin: 0 0 12px; color: #2b1e15;">Reset your MessBook password</h2>
+                <p style="color: #5a4a3d; line-height: 1.6;">Hi {user.get('name', 'there')}, we received a request to reset the password for employee <b>{emp}</b>. Click the button below to set a new password. The link expires in 1 hour.</p>
+                <p style="margin: 28px 0;">
+                  <a href="{reset_link}" style="background: #c65a40; color: white; padding: 12px 22px; border-radius: 999px; text-decoration: none; font-weight: 600;">Reset password</a>
+                </p>
+                <p style="color: #8a7969; font-size: 13px;">If the button doesn't work, paste this link in your browser:<br/><span style="word-break: break-all;">{reset_link}</span></p>
+                <p style="color: #8a7969; font-size: 13px; margin-top: 20px;">Didn't request this? You can safely ignore this email.</p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+        """
+        background.add_task(send_email_async, user["email"], "Reset your MessBook password", html)
+    return {"ok": True, "message": "If an account exists with an email on file, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    rec = await db.password_reset_tokens.find_one({"token": body.token, "used": False})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    expires_at = rec["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=TZ)
+    if now_local() > expires_at:
+        raise HTTPException(status_code=400, detail="Reset link has expired")
+    try:
+        oid = ObjectId(rec["user_id"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid token")
+    await db.users.update_one({"_id": oid}, {"$set": {"password_hash": hash_password(body.new_password)}})
+    await db.password_reset_tokens.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
+    return {"ok": True}
+
+
+# ---------------- Bookings ----------------
+async def is_holiday(meal_date: str, meal_type: str) -> Optional[dict]:
+    h = await db.holidays.find_one({"date": meal_date, "applies_to": {"$in": [meal_type, "both"]}})
+    return h
+
+
+@api.get("/bookings/status")
+async def booking_status(user: dict = Depends(get_current_user)):
+    now = now_local()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+
+    results = []
+    for meal_type, meal_date in [("breakfast", tomorrow), ("dinner", today)]:
+        cutoff = compute_cutoff(meal_type, meal_date)
+        existing = await db.bookings.find_one({
+            "user_id": str(user["_id"]),
+            "meal_type": meal_type,
+            "meal_date": meal_date.isoformat(),
+        })
+        holiday = await is_holiday(meal_date.isoformat(), meal_type)
+        results.append({
+            "meal_type": meal_type,
+            "meal_date": meal_date.isoformat(),
+            "cutoff": cutoff.isoformat(),
+            "cutoff_passed": now >= cutoff,
+            "booked": bool(existing),
+            "booking_id": str(existing["_id"]) if existing else None,
+            "quantity": existing.get("quantity", 1) if existing else None,
+            "booking_type": existing.get("booking_type", "dine_in") if existing else None,
+            "holiday": {"name": holiday["name"]} if holiday else None,
+        })
+    return {"now": now.isoformat(), "items": results}
+
+
+@api.post("/bookings")
+async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)):
+    try:
+        meal_date = parse_iso_date(body.meal_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid meal_date, use YYYY-MM-DD")
+
+    now = now_local()
+    cutoff = compute_cutoff(body.meal_type, meal_date)
+    if now >= cutoff:
+        raise HTTPException(status_code=400, detail=f"Booking cutoff has passed (cutoff was {cutoff.strftime('%d %b %Y %I:%M %p')})")
+    if meal_date < now.date() - timedelta(days=1):
+        raise HTTPException(status_code=400, detail="Cannot book for past dates")
+
+    holiday = await is_holiday(body.meal_date, body.meal_type)
+    if holiday:
+        raise HTTPException(status_code=400, detail=f"{body.meal_type.capitalize()} not available: {holiday['name']} holiday")
+
+    existing = await db.bookings.find_one({
+        "user_id": str(user["_id"]),
+        "meal_type": body.meal_type,
+        "meal_date": body.meal_date,
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="You have already booked this meal. You can update or cancel it.")
+
+    doc = {
+        "user_id": str(user["_id"]),
+        "employee_number": user["employee_number"],
+        "employee_name": user.get("name", ""),
+        "meal_type": body.meal_type,
+        "meal_date": body.meal_date,
+        "quantity": body.quantity,
+        "booking_type": body.booking_type,
+        "served": False,
+        "served_at": None,
+        "served_by": None,
+        "created_at": now.isoformat(),
+    }
+    res = await db.bookings.insert_one(doc)
+    await audit(user, "booking.create", target=str(res.inserted_id), meta={
+        "meal_type": body.meal_type, "meal_date": body.meal_date, "qty": body.quantity, "type": body.booking_type,
+    })
+    return {"id": str(res.inserted_id), "meal_type": body.meal_type, "meal_date": body.meal_date,
+            "quantity": body.quantity, "booking_type": body.booking_type}
+
+
+@api.patch("/bookings/{booking_id}")
+async def update_booking(booking_id: str, body: BookingUpdateIn, user: dict = Depends(get_current_user)):
+    try:
+        booking = await db.bookings.find_one({"_id": ObjectId(booking_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["user_id"] != str(user["_id"]):
+        raise HTTPException(status_code=403, detail="Not your booking")
+    if booking.get("served"):
+        raise HTTPException(status_code=400, detail="Booking already served, cannot update")
+
+    meal_date = parse_iso_date(booking["meal_date"])
+    cutoff = compute_cutoff(booking["meal_type"], meal_date)
+    if now_local() >= cutoff:
+        raise HTTPException(status_code=400, detail="Cannot update after cutoff")
+
+    updates = {}
+    if body.quantity is not None:
+        updates["quantity"] = body.quantity
+    if body.booking_type is not None:
+        updates["booking_type"] = body.booking_type
+    if updates:
+        await db.bookings.update_one({"_id": ObjectId(booking_id)}, {"$set": updates})
+        await audit(user, "booking.update", target=booking_id, meta=updates)
+    return {"ok": True, **updates}
+
+
+@api.delete("/bookings/{booking_id}")
+async def cancel_booking(booking_id: str, user: dict = Depends(get_current_user)):
+    try:
+        booking = await db.bookings.find_one({"_id": ObjectId(booking_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking["user_id"] != str(user["_id"]):
+        raise HTTPException(status_code=403, detail="Not your booking")
+    if booking.get("served"):
+        raise HTTPException(status_code=400, detail="Booking already served, cannot cancel")
+
+    meal_date = parse_iso_date(booking["meal_date"])
+    cutoff = compute_cutoff(booking["meal_type"], meal_date)
+    if now_local() >= cutoff:
+        raise HTTPException(status_code=400, detail="Cannot cancel after cutoff")
+
+    await db.bookings.delete_one({"_id": ObjectId(booking_id)})
+    await audit(user, "booking.cancel", target=booking_id)
+    return {"ok": True}
+
+
+@api.get("/bookings/mine")
+async def my_bookings(
+    month: Optional[str] = Query(None),
+    user: dict = Depends(get_current_user),
+):
+    if not month:
+        n = now_local()
+        month = f"{n.year:04d}-{n.month:02d}"
+    cursor = db.bookings.find({
+        "user_id": str(user["_id"]),
+        "meal_date": {"$regex": f"^{month}-"},
+    }).sort("meal_date", 1)
+    items = []
+    b_qty = d_qty = 0
+    async for b in cursor:
+        q = b.get("quantity", 1)
+        if b["meal_type"] == "breakfast":
+            b_qty += q
+        else:
+            d_qty += q
+        items.append({
+            "id": str(b["_id"]),
+            "meal_type": b["meal_type"],
+            "meal_date": b["meal_date"],
+            "quantity": q,
+            "booking_type": b.get("booking_type", "dine_in"),
+            "served": b.get("served", False),
+            "created_at": b.get("created_at"),
+        })
+    return {
+        "month": month,
+        "breakfast_count": b_qty,
+        "dinner_count": d_qty,
+        "total": b_qty + d_qty,
+        "items": items,
+    }
+
+
+# ---------------- Menu (read for all authed users) ----------------
+@api.get("/menu")
+async def get_menu(date: str, meal_type: Optional[Literal["breakfast", "dinner"]] = None,
+                   user: dict = Depends(get_current_user)):
+    q: dict = {"date": date}
+    if meal_type:
+        q["meal_type"] = meal_type
+    items = []
+    async for m in db.menus.find(q):
+        items.append({"date": m["date"], "meal_type": m["meal_type"], "items": m.get("items", [])})
+    return items
+
+
+@api.get("/holidays")
+async def list_holidays(user: dict = Depends(get_current_user)):
+    now = now_local().date()
+    start = (now - timedelta(days=7)).isoformat()
+    end = (now + timedelta(days=60)).isoformat()
+    out = []
+    async for h in db.holidays.find({"date": {"$gte": start, "$lte": end}}).sort("date", 1):
+        out.append({"id": str(h["_id"]), "date": h["date"], "name": h["name"], "applies_to": h.get("applies_to", "both")})
+    return out
+
+
+# ---------------- Chef endpoints ----------------
+@api.get("/chef/summary")
+async def chef_summary(date: Optional[str] = None, u: dict = Depends(get_chef_or_admin)):
+    d = date or now_local().date().isoformat()
+    out = {"date": d, "breakfast": {}, "dinner": {}}
+    for meal in ("breakfast", "dinner"):
+        pipeline = [
+            {"$match": {"meal_date": d, "meal_type": meal}},
+            {"$group": {
+                "_id": {"type": "$booking_type", "served": "$served"},
+                "qty": {"$sum": "$quantity"},
+                "orders": {"$sum": 1},
+            }},
+        ]
+        parcel_qty = dine_qty = served_qty = pending_qty = total_qty = total_orders = 0
+        async for row in db.bookings.aggregate(pipeline):
+            btype = row["_id"].get("type", "dine_in")
+            served = row["_id"].get("served", False)
+            q = row["qty"]
+            total_qty += q
+            total_orders += row["orders"]
+            if btype == "parcel":
+                parcel_qty += q
+            else:
+                dine_qty += q
+            if served:
+                served_qty += q
+            else:
+                pending_qty += q
+        out[meal] = {
+            "total": total_qty,
+            "orders": total_orders,
+            "parcel": parcel_qty,
+            "dine_in": dine_qty,
+            "served": served_qty,
+            "pending": pending_qty,
+        }
+    return out
+
+
+@api.get("/chef/bookings")
+async def chef_bookings(
+    date: Optional[str] = None,
+    meal_type: Optional[Literal["breakfast", "dinner"]] = None,
+    q: Optional[str] = None,
+    u: dict = Depends(get_chef_or_admin),
+):
+    d = date or now_local().date().isoformat()
+    query: dict = {"meal_date": d}
+    if meal_type:
+        query["meal_type"] = meal_type
+    if q:
+        query["$or"] = [
+            {"employee_number": {"$regex": q, "$options": "i"}},
+            {"employee_name": {"$regex": q, "$options": "i"}},
+        ]
+    items = []
+    async for b in db.bookings.find(query).sort([("meal_type", 1), ("employee_number", 1)]):
+        items.append({
+            "id": str(b["_id"]),
+            "employee_number": b["employee_number"],
+            "employee_name": b.get("employee_name", ""),
+            "meal_type": b["meal_type"],
+            "meal_date": b["meal_date"],
+            "quantity": b.get("quantity", 1),
+            "booking_type": b.get("booking_type", "dine_in"),
+            "served": b.get("served", False),
+            "served_at": b.get("served_at"),
+            "served_by": b.get("served_by"),
+        })
+    return items
+
+
+@api.post("/chef/serve/{booking_id}")
+async def chef_serve(booking_id: str, u: dict = Depends(get_chef_or_admin)):
+    try:
+        oid = ObjectId(booking_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    b = await db.bookings.find_one({"_id": oid})
+    if not b:
+        raise HTTPException(status_code=404, detail="Not found")
+    if b.get("served"):
+        raise HTTPException(status_code=400, detail="Already served")
+    await db.bookings.update_one({"_id": oid}, {"$set": {
+        "served": True,
+        "served_at": now_local().isoformat(),
+        "served_by": u["employee_number"],
+    }})
+    await audit(u, "booking.serve", target=booking_id)
+    return {"ok": True}
+
+
+@api.post("/chef/unserve/{booking_id}")
+async def chef_unserve(booking_id: str, u: dict = Depends(get_chef_or_admin)):
+    try:
+        oid = ObjectId(booking_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    await db.bookings.update_one({"_id": oid}, {"$set": {
+        "served": False, "served_at": None, "served_by": None,
+    }})
+    await audit(u, "booking.unserve", target=booking_id)
+    return {"ok": True}
+
+
+# ---------------- Admin endpoints ----------------
+@api.get("/admin/employees")
+async def list_employees(admin: dict = Depends(get_admin_user)):
+    users = []
+    async for u in db.users.find({}).sort("created_at", -1):
+        users.append(user_public(u))
+    return users
+
+
+@api.post("/admin/employees")
+async def admin_create_employee(body: AdminCreateEmployeeIn, admin: dict = Depends(get_admin_user)):
+    emp = body.employee_number.strip()
+    if await db.users.find_one({"employee_number": emp}):
+        raise HTTPException(status_code=400, detail="Employee number already exists")
+    doc = {
+        "employee_number": emp,
+        "name": body.name.strip(),
+        "email": body.email.lower() if body.email else None,
+        "password_hash": hash_password(body.password),
+        "role": body.role,
+        "created_at": now_local().isoformat(),
+    }
+    res = await db.users.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    await audit(admin, "employee.create", target=emp, meta={"role": body.role})
+    return user_public(doc)
+
+
+@api.delete("/admin/employees/{user_id}")
+async def admin_delete_employee(user_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    if str(oid) == str(admin["_id"]):
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    target = await db.users.find_one({"_id": oid})
+    res = await db.users.delete_one({"_id": oid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.bookings.delete_many({"user_id": str(oid)})
+    await audit(admin, "employee.delete", target=target.get("employee_number", "") if target else "")
+    return {"ok": True}
+
+
+# --- Holidays ---
+@api.get("/admin/holidays")
+async def admin_list_holidays(admin: dict = Depends(get_admin_user)):
+    out = []
+    async for h in db.holidays.find({}).sort("date", -1):
+        out.append({"id": str(h["_id"]), "date": h["date"], "name": h["name"], "applies_to": h.get("applies_to", "both")})
+    return out
+
+
+@api.post("/admin/holidays")
+async def admin_add_holiday(body: HolidayIn, admin: dict = Depends(get_admin_user)):
+    try:
+        parse_iso_date(body.date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+    existing = await db.holidays.find_one({"date": body.date})
+    if existing:
+        raise HTTPException(status_code=400, detail="Holiday already set for this date")
+    doc = {"date": body.date, "name": body.name.strip(), "applies_to": body.applies_to,
+           "created_at": now_local().isoformat()}
+    res = await db.holidays.insert_one(doc)
+    await audit(admin, "holiday.create", target=body.date, meta={"name": body.name})
+    return {"id": str(res.inserted_id), "date": body.date, "name": body.name, "applies_to": body.applies_to}
+
+
+@api.delete("/admin/holidays/{holiday_id}")
+async def admin_delete_holiday(holiday_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(holiday_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    await db.holidays.delete_one({"_id": oid})
+    await audit(admin, "holiday.delete", target=holiday_id)
+    return {"ok": True}
+
+
+# --- Menu ---
+@api.get("/admin/menu")
+async def admin_list_menu(
+    from_date: Optional[str] = Query(None, alias="from"),
+    to_date: Optional[str] = Query(None, alias="to"),
+    admin: dict = Depends(get_admin_user),
+):
+    now = now_local().date()
+    start = from_date or (now - timedelta(days=1)).isoformat()
+    end = to_date or (now + timedelta(days=14)).isoformat()
+    out = []
+    async for m in db.menus.find({"date": {"$gte": start, "$lte": end}}).sort([("date", 1), ("meal_type", 1)]):
+        out.append({"id": str(m["_id"]), "date": m["date"], "meal_type": m["meal_type"], "items": m.get("items", [])})
+    return out
+
+
+@api.put("/admin/menu")
+async def admin_upsert_menu(body: MenuIn, admin: dict = Depends(get_admin_user)):
+    try:
+        parse_iso_date(body.date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+    items = [i.strip() for i in body.items if i.strip()]
+    await db.menus.update_one(
+        {"date": body.date, "meal_type": body.meal_type},
+        {"$set": {"items": items, "updated_at": now_local().isoformat()}},
+        upsert=True,
+    )
+    await audit(admin, "menu.update", target=f"{body.date}:{body.meal_type}", meta={"items": items})
+    return {"ok": True, "date": body.date, "meal_type": body.meal_type, "items": items}
+
+
+# --- Reports & Audit ---
+@api.get("/admin/summary")
+async def admin_summary(
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        parse_iso_date(from_date)
+        parse_iso_date(to_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+
+    pipeline = [
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$group": {
+            "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
+            "qty": {"$sum": "$quantity"},
+        }},
+    ]
+    per_emp: dict = {}
+    total_b = total_d = 0
+    async for row in db.bookings.aggregate(pipeline):
+        emp = row["_id"]["emp"]
+        name = row["_id"].get("name") or ""
+        meal = row["_id"]["meal"]
+        cnt = row["qty"]
+        if emp not in per_emp:
+            per_emp[emp] = {"employee_number": emp, "name": name, "breakfast": 0, "dinner": 0}
+        per_emp[emp][meal] = cnt
+        if meal == "breakfast":
+            total_b += cnt
+        else:
+            total_d += cnt
+    rows = list(per_emp.values())
+    for r in rows:
+        r["total"] = r["breakfast"] + r["dinner"]
+    rows.sort(key=lambda r: r["employee_number"])
+    return {"from": from_date, "to": to_date, "total_breakfast": total_b, "total_dinner": total_d, "employees": rows}
+
+
+async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="C65A40")
+    headers = ["Employee Number", "Name", "Breakfast", "Dinner", "Total"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = header_font; c.fill = header_fill; c.alignment = Alignment(horizontal="center")
+
+    pipeline = [
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$group": {
+            "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
+            "qty": {"$sum": "$quantity"},
+        }},
+    ]
+    per_emp: dict = {}
+    async for row in db.bookings.aggregate(pipeline):
+        emp = row["_id"]["emp"]
+        name = row["_id"].get("name") or ""
+        meal = row["_id"]["meal"]
+        if emp not in per_emp:
+            per_emp[emp] = {"emp": emp, "name": name, "breakfast": 0, "dinner": 0}
+        per_emp[emp][meal] = row["qty"]
+    rows = sorted(per_emp.values(), key=lambda r: r["emp"])
+    r_idx = 2
+    for r in rows:
+        ws.cell(row=r_idx, column=1, value=r["emp"])
+        ws.cell(row=r_idx, column=2, value=r["name"])
+        ws.cell(row=r_idx, column=3, value=r["breakfast"])
+        ws.cell(row=r_idx, column=4, value=r["dinner"])
+        ws.cell(row=r_idx, column=5, value=r["breakfast"] + r["dinner"])
+        r_idx += 1
+    if rows:
+        ws.cell(row=r_idx, column=1, value="TOTAL").font = Font(bold=True)
+        ws.cell(row=r_idx, column=3, value=sum(r["breakfast"] for r in rows)).font = Font(bold=True)
+        ws.cell(row=r_idx, column=4, value=sum(r["dinner"] for r in rows)).font = Font(bold=True)
+        ws.cell(row=r_idx, column=5, value=sum(r["breakfast"] + r["dinner"] for r in rows)).font = Font(bold=True)
+    for col, w in [("A", 22), ("B", 28), ("C", 14), ("D", 14), ("E", 12)]:
+        ws.column_dimensions[col].width = w
+
+    ws2 = wb.create_sheet("Bookings")
+    headers2 = ["Date", "Meal", "Type", "Qty", "Employee Number", "Name", "Served", "Booked At"]
+    for i, h in enumerate(headers2, 1):
+        c = ws2.cell(row=1, column=i, value=h)
+        c.font = header_font; c.fill = header_fill; c.alignment = Alignment(horizontal="center")
+    r_idx = 2
+    async for b in db.bookings.find({"meal_date": {"$gte": from_date, "$lte": to_date}}).sort([("meal_date", 1), ("meal_type", 1)]):
+        ws2.cell(row=r_idx, column=1, value=b["meal_date"])
+        ws2.cell(row=r_idx, column=2, value=b["meal_type"].capitalize())
+        ws2.cell(row=r_idx, column=3, value=b.get("booking_type", "dine_in").replace("_", " ").title())
+        ws2.cell(row=r_idx, column=4, value=b.get("quantity", 1))
+        ws2.cell(row=r_idx, column=5, value=b["employee_number"])
+        ws2.cell(row=r_idx, column=6, value=b.get("employee_name", ""))
+        ws2.cell(row=r_idx, column=7, value="Yes" if b.get("served") else "No")
+        ws2.cell(row=r_idx, column=8, value=b.get("created_at", ""))
+        r_idx += 1
+    for col, w in [("A", 14), ("B", 12), ("C", 12), ("D", 8), ("E", 20), ("F", 26), ("G", 10), ("H", 30)]:
+        ws2.column_dimensions[col].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@api.get("/admin/export")
+async def admin_export_excel(
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        parse_iso_date(from_date); parse_iso_date(to_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+    data = await build_report_xlsx(from_date, to_date)
+    filename = f"mess_bookings_{from_date}_to_{to_date}.xlsx"
+    await audit(admin, "report.export", target=f"{from_date}..{to_date}")
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.post("/admin/email-report")
+async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
+    try:
+        parse_iso_date(body.from_date); parse_iso_date(body.to_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date range")
+
+    # Prepare Excel and send via email as a link? Emergent proxy only sends HTML — no attachments here.
+    # Instead: send an HTML summary + a note that the Excel can be downloaded from the console.
+    data = await admin_summary(from_date=body.from_date, to_date=body.to_date, admin=admin)
+    rows_html = "".join(
+        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['employee_number']}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['name']}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast']}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner']}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:600;'>{r['total']}</td></tr>"
+        for r in data["employees"]
+    )
+    html = f"""
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
+      <tr><td align="center">
+        <table width="620" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
+          <tr><td>
+            <h2 style="margin:0 0 8px;color:#2b1e15;">MessBook — Booking Report</h2>
+            <p style="color:#5a4a3d;margin:0 0 20px;">Period: <b>{body.from_date}</b> to <b>{body.to_date}</b></p>
+            <table width="100%" style="border-collapse:collapse;">
+              <thead>
+                <tr style="background:#c65a40;color:white;">
+                  <th style="padding:10px;text-align:left;">Emp #</th>
+                  <th style="padding:10px;text-align:left;">Name</th>
+                  <th style="padding:10px;text-align:right;">Breakfast</th>
+                  <th style="padding:10px;text-align:right;">Dinner</th>
+                  <th style="padding:10px;text-align:right;">Total</th>
+                </tr>
+              </thead>
+              <tbody>{rows_html or '<tr><td colspan="5" style="padding:20px;text-align:center;color:#8a7969;">No bookings in this range.</td></tr>'}</tbody>
+              <tfoot>
+                <tr style="background:#f5efe6;font-weight:700;">
+                  <td colspan="2" style="padding:10px;">Total</td>
+                  <td style="padding:10px;text-align:right;">{data['total_breakfast']}</td>
+                  <td style="padding:10px;text-align:right;">{data['total_dinner']}</td>
+                  <td style="padding:10px;text-align:right;">{data['total_breakfast'] + data['total_dinner']}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p style="color:#8a7969;font-size:12px;margin-top:22px;">Sign in to the MessBook admin console to download the full Excel file (Summary + Bookings sheets).</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+    background.add_task(send_email_async, body.email, f"MessBook Report {body.from_date} → {body.to_date}", html)
+    await audit(admin, "report.email", target=body.email, meta={"from": body.from_date, "to": body.to_date})
+    return {"ok": True, "message": f"Report will be emailed to {body.email}"}
+
+
+@api.get("/admin/audit-logs")
+async def admin_audit_logs(limit: int = Query(100, ge=1, le=500), admin: dict = Depends(get_admin_user)):
+    out = []
+    async for log in db.audit_logs.find({}).sort("timestamp", -1).limit(limit):
+        out.append({
+            "id": str(log["_id"]),
+            "actor_employee_number": log.get("actor_employee_number", ""),
+            "actor_role": log.get("actor_role", ""),
+            "action": log["action"],
+            "target": log.get("target", ""),
+            "meta": log.get("meta", {}),
+            "timestamp": log.get("timestamp"),
+        })
+    return out
+
+
+@api.get("/admin/today")
+async def admin_today(admin: dict = Depends(get_admin_user)):
+    now = now_local()
+    today = now.date().isoformat()
+    tomorrow = (now.date() + timedelta(days=1)).isoformat()
+
+    async def sum_qty(match: dict) -> int:
+        cur = db.bookings.aggregate([{"$match": match}, {"$group": {"_id": None, "q": {"$sum": "$quantity"}}}])
+        async for r in cur:
+            return r.get("q", 0)
+        return 0
+
+    return {
+        "today": today,
+        "tomorrow": tomorrow,
+        "breakfast_today": await sum_qty({"meal_type": "breakfast", "meal_date": today}),
+        "dinner_today": await sum_qty({"meal_type": "dinner", "meal_date": today}),
+        "breakfast_tomorrow": await sum_qty({"meal_type": "breakfast", "meal_date": tomorrow}),
+        "total_employees": await db.users.count_documents({"role": {"$in": ["employee", "chef"]}}),
+    }
+
+
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"service": "MessBook API", "ok": True}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+# ---------------- Startup ----------------
+async def seed_admin():
+    emp = os.environ.get("ADMIN_EMPLOYEE_NUMBER", "ADMIN")
+    pw = os.environ.get("ADMIN_PASSWORD", "admin@123")
+    name = os.environ.get("ADMIN_NAME", "Admin")
+    admin_email = os.environ.get("ADMIN_EMAIL") or None
+    existing = await db.users.find_one({"employee_number": emp})
+    if existing is None:
+        await db.users.insert_one({
+            "employee_number": emp, "name": name, "email": admin_email,
+            "password_hash": hash_password(pw), "role": "admin",
+            "created_at": now_local().isoformat(),
+        })
+        logger.info(f"Seeded admin: {emp}")
+    else:
+        updates = {}
+        if existing.get("role") != "admin":
+            updates["role"] = "admin"
+        if not verify_password(pw, existing.get("password_hash", "")):
+            updates["password_hash"] = hash_password(pw)
+        if updates:
+            await db.users.update_one({"_id": existing["_id"]}, {"$set": updates})
+            logger.info(f"Updated admin: {emp}")
 
-# Include the router in the main app
-app.include_router(api_router)
+
+@app.on_event("startup")
+async def startup():
+    await db.users.create_index("employee_number", unique=True)
+    await db.bookings.create_index([("user_id", 1), ("meal_type", 1), ("meal_date", 1)], unique=True)
+    await db.bookings.create_index("meal_date")
+    await db.holidays.create_index("date", unique=True)
+    await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)
+    await db.audit_logs.create_index("timestamp")
+    try:
+        await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=3600)
+    except Exception:
+        pass
+    await seed_admin()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()
+
+
+app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
