@@ -46,21 +46,47 @@ export default function ChefDashboard() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+  const [knownBookingIds, setKnownBookingIds] = useState(null);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [s, b] = await Promise.all([
         client.get(`/chef/summary?date=${date}`),
         client.get(`/chef/bookings?date=${date}${mealFilter !== "all" ? `&meal_type=${mealFilter}` : ""}${search ? `&q=${encodeURIComponent(search)}` : ""}`),
       ]);
       setSummary(s.data);
+      // Detect newly-arrived bookings during silent auto-refresh
+      if (silent && knownBookingIds && date === todayISO()) {
+        const fresh = b.data.filter((x) => !knownBookingIds.has(x.id));
+        fresh.forEach((n) => {
+          const mealLabel = n.meal_type === "breakfast" ? "Breakfast" : "Dinner";
+          const typeLabel = n.booking_type === "parcel" ? "Parcel" : "Dine-in";
+          toast.success(
+            `New ${mealLabel} order · ${typeLabel} × ${n.quantity}`,
+            { description: `${n.employee_name || "Someone"} (#${n.employee_number})`, duration: 6000 }
+          );
+        });
+      }
+      setKnownBookingIds(new Set(b.data.map((x) => x.id)));
       setBookings(b.data);
-    } catch (e) { toast.error(formatApiError(e)); }
-    finally { setLoading(false); }
+      setLastRefreshed(new Date());
+    } catch (e) { if (!silent) toast.error(formatApiError(e)); }
+    finally { if (!silent) setLoading(false); }
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, mealFilter]);
+
+  // Auto-refresh every 30 seconds when viewing today and the toggle is on
+  useEffect(() => {
+    if (!autoRefresh) return;
+    if (date !== todayISO()) return;
+    const id = setInterval(() => { load(true); }, 30000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [autoRefresh, date, mealFilter, search, knownBookingIds]);
 
   const onSearch = (e) => {
     e.preventDefault();

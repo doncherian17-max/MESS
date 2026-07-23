@@ -20,7 +20,12 @@ import { toast } from "sonner";
 import {
   Download, Users, UserPlus, Sunrise, Moon, Loader2, Trash2, ShieldCheck, User as UserIcon,
   Calendar as CalendarIcon, ChefHat, PartyPopper, Plus, ClipboardList, Mail, ScrollText,
+  BarChart3, Upload, FileDown, Trophy,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  LineChart, Line,
+} from "recharts";
 
 function todayISO() {
   const n = new Date();
@@ -64,6 +69,17 @@ export default function AdminDashboard() {
   // Audit logs
   const [audit, setAudit] = useState([]);
 
+  // Insights (trend + top eaters)
+  const [insightsDays, setInsightsDays] = useState(14);
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
+  // Bulk import
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkResult, setBulkResult] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const loadTop = async () => {
     try {
       const [t, e] = await Promise.all([
@@ -102,6 +118,43 @@ export default function AdminDashboard() {
       const { data } = await client.get("/admin/audit-logs?limit=200");
       setAudit(data);
     } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const loadInsights = async (days = insightsDays) => {
+    setInsightsLoading(true);
+    try {
+      const { data } = await client.get(`/admin/insights?days=${days}`);
+      setInsights(data);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setInsightsLoading(false); }
+  };
+
+  const submitBulk = async (e) => {
+    e.preventDefault();
+    if (!bulkFile) { toast.error("Choose a CSV file"); return; }
+    setBulkBusy(true);
+    setBulkResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", bulkFile);
+      const { data } = await client.post("/admin/employees/bulk", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setBulkResult(data);
+      toast.success(`Imported ${data.created} employees`);
+      await loadTop();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setBulkBusy(false); }
+  };
+
+  const downloadCsvTemplate = () => {
+    const csv = "employee_number,name,email,role,password\n100001,Priya Sharma,priya@company.com,employee,\n100002,Ravi Kumar,,chef,ravi1234\n";
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "employees_template.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); /* eslint-disable-next-line */ }, []);
@@ -229,9 +282,13 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        <Tabs defaultValue="report" className="w-full" onValueChange={(v) => { if (v === "audit") loadAudit(); }}>
+        <Tabs defaultValue="report" className="w-full" onValueChange={(v) => {
+          if (v === "audit") loadAudit();
+          if (v === "insights" && !insights) loadInsights();
+        }}>
           <TabsList data-testid="admin-tabs" className="flex-wrap h-auto">
             <TabsTrigger value="report" data-testid="tab-report" className="gap-1.5"><ClipboardList className="h-3.5 w-3.5" /> Report</TabsTrigger>
+            <TabsTrigger value="insights" data-testid="tab-insights" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" /> Insights</TabsTrigger>
             <TabsTrigger value="employees" data-testid="tab-employees" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Employees</TabsTrigger>
             <TabsTrigger value="holidays" data-testid="tab-holidays" className="gap-1.5"><PartyPopper className="h-3.5 w-3.5" /> Holidays</TabsTrigger>
             <TabsTrigger value="menu" data-testid="tab-menu" className="gap-1.5"><ChefHat className="h-3.5 w-3.5" /> Menu</TabsTrigger>
@@ -326,6 +383,130 @@ export default function AdminDashboard() {
             </Card>
           </TabsContent>
 
+          {/* Insights */}
+          <TabsContent value="insights" className="pt-6">
+            <Card className="border-border">
+              <CardContent className="p-6 lg:p-8">
+                <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
+                  <div>
+                    <h3 className="font-display text-2xl font-bold">Trends &amp; top eaters</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Last {insights?.days || insightsDays} days · {insights ? `${insights.from} → ${insights.to}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-end gap-3">
+                    <div className="space-y-2">
+                      <Label className="overline">Range</Label>
+                      <Select value={String(insightsDays)} onValueChange={(v) => { setInsightsDays(Number(v)); loadInsights(Number(v)); }}>
+                        <SelectTrigger className="h-11 w-[150px]" data-testid="insights-days-select"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="7">Last 7 days</SelectItem>
+                          <SelectItem value="14">Last 14 days</SelectItem>
+                          <SelectItem value="30">Last 30 days</SelectItem>
+                          <SelectItem value="60">Last 60 days</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button variant="outline" onClick={() => loadInsights()} disabled={insightsLoading}
+                      data-testid="insights-refresh-button" className="h-11 rounded-full">
+                      {insightsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
+                    </Button>
+                  </div>
+                </div>
+
+                {!insights ? (
+                  <div className="text-muted-foreground py-16 text-center" data-testid="insights-empty">
+                    <BarChart3 className="h-8 w-8 mx-auto mb-3 opacity-50" />
+                    Loading insights…
+                  </div>
+                ) : (
+                  <>
+                    {/* Bar chart: daily breakdown */}
+                    <div className="mb-8">
+                      <div className="overline text-muted-foreground mb-3">Daily meals · breakfast vs dinner</div>
+                      <div className="rounded-xl border border-border p-4 bg-card" data-testid="insights-bar-chart">
+                        <ResponsiveContainer width="100%" height={280}>
+                          <BarChart data={insights.trend} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                              tickFormatter={(v) => v.slice(5)} />
+                            <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} />
+                            <Tooltip
+                              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                              cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} iconType="circle" />
+                            <Bar dataKey="breakfast" fill="hsl(101 20% 45%)" name="Breakfast" radius={[4,4,0,0]} />
+                            <Bar dataKey="dinner" fill="hsl(14 55% 55%)" name="Dinner" radius={[4,4,0,0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    {/* Line chart: total trend */}
+                    <div className="mb-8">
+                      <div className="overline text-muted-foreground mb-3">Total meals per day</div>
+                      <div className="rounded-xl border border-border p-4 bg-card" data-testid="insights-line-chart">
+                        <ResponsiveContainer width="100%" height={200}>
+                          <LineChart data={insights.trend} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                              tickFormatter={(v) => v.slice(5)} />
+                            <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} />
+                            <Tooltip
+                              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                            />
+                            <Line type="monotone" dataKey="total" stroke="hsl(14 55% 51%)" strokeWidth={2.5}
+                              dot={{ r: 3, fill: "hsl(14 55% 51%)" }} activeDot={{ r: 5 }} name="Total meals" />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    {/* Top eaters */}
+                    <div>
+                      <div className="flex items-baseline justify-between mb-3">
+                        <div className="overline text-muted-foreground flex items-center gap-2">
+                          <Trophy className="h-3.5 w-3.5" /> Top eaters this range
+                        </div>
+                        <span className="text-xs text-muted-foreground">Top {insights.top_eaters.length}</span>
+                      </div>
+                      <div className="rounded-xl border border-border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-muted/40">
+                              <TableHead className="py-4 w-12">#</TableHead>
+                              <TableHead>Employee</TableHead>
+                              <TableHead className="text-right">Breakfast</TableHead>
+                              <TableHead className="text-right">Dinner</TableHead>
+                              <TableHead className="text-right">Total</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {insights.top_eaters.length === 0 ? (
+                              <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground" data-testid="top-eaters-empty">No bookings in this range.</TableCell></TableRow>
+                            ) : insights.top_eaters.map((r, idx) => (
+                              <TableRow key={r.employee_number} data-testid={`top-eater-row-${r.employee_number}`}>
+                                <TableCell className="py-4 font-display font-extrabold text-lg text-primary">{idx + 1}</TableCell>
+                                <TableCell>
+                                  <div className="font-medium">{r.name || "—"}</div>
+                                  <div className="text-xs text-muted-foreground font-mono-plex">#{r.employee_number}</div>
+                                </TableCell>
+                                <TableCell className="text-right font-mono-plex">{r.breakfast}</TableCell>
+                                <TableCell className="text-right font-mono-plex">{r.dinner}</TableCell>
+                                <TableCell className="text-right font-mono-plex font-semibold text-base">{r.total}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Employees */}
           <TabsContent value="employees" className="pt-6">
             <Card className="border-border">
@@ -335,7 +516,62 @@ export default function AdminDashboard() {
                     <h3 className="font-display text-2xl font-bold">Employees</h3>
                     <p className="text-sm text-muted-foreground mt-1">{employees.length} total accounts</p>
                   </div>
-                  <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Dialog open={bulkOpen} onOpenChange={(v) => { setBulkOpen(v); if (!v) { setBulkResult(null); setBulkFile(null); } }}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" data-testid="bulk-import-button" className="rounded-full gap-2">
+                          <Upload className="h-4 w-4" /> Bulk import
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent data-testid="bulk-import-dialog" className="max-w-lg">
+                        <DialogHeader>
+                          <DialogTitle>Bulk import employees</DialogTitle>
+                          <DialogDescription>
+                            Upload a CSV with columns: <span className="font-mono-plex text-xs">employee_number, name, email, role, password</span>.
+                            Only <b>employee_number</b> and <b>name</b> are required. If <span className="font-mono-plex">password</span> is blank we use the employee number as the default password.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form onSubmit={submitBulk} className="space-y-4">
+                          <div className="space-y-2">
+                            <Label className="overline">CSV file</Label>
+                            <Input type="file" accept=".csv,text/csv"
+                              onChange={(e) => { setBulkFile(e.target.files?.[0] || null); setBulkResult(null); }}
+                              data-testid="bulk-file-input" className="h-11" />
+                          </div>
+                          <Button type="button" variant="ghost" size="sm" onClick={downloadCsvTemplate}
+                            data-testid="download-csv-template" className="gap-2 text-primary">
+                            <FileDown className="h-3.5 w-3.5" /> Download template
+                          </Button>
+                          {bulkResult && (
+                            <div className="rounded-lg border border-border p-3 bg-muted/40 text-sm" data-testid="bulk-result">
+                              <div className="font-semibold text-secondary flex items-center gap-1.5">
+                                <Users className="h-3.5 w-3.5" /> Created: <span className="font-mono-plex">{bulkResult.created}</span>
+                              </div>
+                              {bulkResult.skipped?.length > 0 && (
+                                <div className="text-muted-foreground mt-1.5">
+                                  Skipped {bulkResult.skipped.length} (already exist): {bulkResult.skipped.map((s) => s.employee_number).join(", ")}
+                                </div>
+                              )}
+                              {bulkResult.errors?.length > 0 && (
+                                <div className="text-destructive mt-1.5">
+                                  <div className="font-semibold">Errors ({bulkResult.errors.length}):</div>
+                                  <ul className="list-disc list-inside">
+                                    {bulkResult.errors.map((e, i) => (<li key={i}>Line {e.line}: {e.error}</li>))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <DialogFooter>
+                            <Button type="button" variant="ghost" onClick={() => setBulkOpen(false)}>Close</Button>
+                            <Button type="submit" disabled={bulkBusy || !bulkFile} data-testid="bulk-submit-button">
+                              {bulkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Import"}
+                            </Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                     <DialogTrigger asChild>
                       <Button data-testid="add-employee-button" className="rounded-full gap-2">
                         <UserPlus className="h-4 w-4" /> Add employee
@@ -387,6 +623,7 @@ export default function AdminDashboard() {
                       </form>
                     </DialogContent>
                   </Dialog>
+                  </div>
                 </div>
                 <div className="rounded-xl border border-border overflow-hidden">
                   <Table>

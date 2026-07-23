@@ -16,8 +16,9 @@ from zoneinfo import ZoneInfo
 import bcrypt
 import jwt
 import httpx
+import csv as csvlib
 from bson import ObjectId
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Request, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Request, BackgroundTasks, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -1032,6 +1033,129 @@ async def admin_audit_logs(limit: int = Query(100, ge=1, le=500), admin: dict = 
             "timestamp": log.get("timestamp"),
         })
     return out
+
+
+@api.get("/admin/insights")
+async def admin_insights(days: int = Query(14, ge=1, le=90), admin: dict = Depends(get_admin_user)):
+    """Daily breakdown + top eaters for the last N days (inclusive of today)."""
+    now = now_local().date()
+    start = now - timedelta(days=days - 1)
+    from_date = start.isoformat()
+    to_date = now.isoformat()
+
+    # Daily trend: one row per date + meal_type
+    trend_map: dict = {}
+    async for row in db.bookings.aggregate([
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$group": {
+            "_id": {"date": "$meal_date", "meal": "$meal_type"},
+            "qty": {"$sum": "$quantity"},
+        }},
+    ]):
+        d = row["_id"]["date"]
+        m = row["_id"]["meal"]
+        if d not in trend_map:
+            trend_map[d] = {"date": d, "breakfast": 0, "dinner": 0}
+        trend_map[d][m] = row["qty"]
+
+    # Fill missing days with zeros so the chart is dense
+    trend = []
+    cur = start
+    while cur <= now:
+        iso = cur.isoformat()
+        e = trend_map.get(iso, {"date": iso, "breakfast": 0, "dinner": 0})
+        e["total"] = e["breakfast"] + e["dinner"]
+        trend.append(e)
+        cur = cur + timedelta(days=1)
+
+    # Top eaters over the range
+    top_map: dict = {}
+    async for row in db.bookings.aggregate([
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$group": {
+            "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
+            "qty": {"$sum": "$quantity"},
+        }},
+    ]):
+        emp = row["_id"]["emp"]; name = row["_id"].get("name") or ""; m = row["_id"]["meal"]
+        if emp not in top_map:
+            top_map[emp] = {"employee_number": emp, "name": name, "breakfast": 0, "dinner": 0}
+        top_map[emp][m] = row["qty"]
+    top = [{**v, "total": v["breakfast"] + v["dinner"]} for v in top_map.values()]
+    top.sort(key=lambda r: r["total"], reverse=True)
+    top = top[:10]
+
+    return {"from": from_date, "to": to_date, "days": days, "trend": trend, "top_eaters": top}
+
+
+@api.post("/admin/employees/bulk")
+async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
+    """Bulk-create employees from a CSV. Header row required.
+    Columns (any order): employee_number (required), name (required), email (optional),
+    role (optional, defaults to employee), password (optional, defaults to employee_number)."""
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a .csv file")
+    try:
+        raw = (await file.read()).decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+
+    reader = csvlib.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV is empty or missing a header row")
+    # Normalise header names to lowercase for lookup
+    field_map = {name.strip().lower(): name for name in reader.fieldnames}
+    required = ["employee_number", "name"]
+    for req in required:
+        if req not in field_map:
+            raise HTTPException(status_code=400, detail=f"CSV missing required column: {req}")
+
+    created = 0
+    skipped = []
+    errors = []
+    for idx, row in enumerate(reader, start=2):  # start=2 to reflect the actual line in the file
+        emp = (row.get(field_map["employee_number"]) or "").strip()
+        name = (row.get(field_map.get("name", "")) or "").strip()
+        if not emp or not name:
+            errors.append({"line": idx, "error": "employee_number and name are required"})
+            continue
+
+        role = "employee"
+        if "role" in field_map:
+            r = (row.get(field_map["role"]) or "").strip().lower()
+            if r in ("employee", "admin", "chef"):
+                role = r
+            elif r:
+                errors.append({"line": idx, "error": f"invalid role '{r}'"})
+                continue
+
+        email = None
+        if "email" in field_map:
+            e = (row.get(field_map["email"]) or "").strip().lower()
+            email = e or None
+
+        password = emp  # default password = their employee number
+        if "password" in field_map:
+            p = (row.get(field_map["password"]) or "").strip()
+            if p:
+                if len(p) < 4:
+                    errors.append({"line": idx, "error": "password must be at least 4 characters"})
+                    continue
+                password = p
+
+        if await db.users.find_one({"employee_number": emp}):
+            skipped.append({"line": idx, "employee_number": emp, "reason": "already exists"})
+            continue
+
+        await db.users.insert_one({
+            "employee_number": emp, "name": name, "email": email,
+            "password_hash": hash_password(password), "role": role,
+            "created_at": now_local().isoformat(),
+        })
+        created += 1
+
+    await audit(admin, "employee.bulk_import", meta={"created": created, "skipped": len(skipped), "errors": len(errors)})
+    return {"created": created, "skipped": skipped, "errors": errors}
 
 
 @api.get("/admin/today")
