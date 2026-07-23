@@ -8,7 +8,7 @@ import os
 import io
 import logging
 import secrets
-from datetime import datetime, timedelta, date as date_cls
+from datetime import datetime, timedelta, date as date_cls, timezone as _tz
 from typing import List, Optional, Literal
 
 from zoneinfo import ZoneInfo
@@ -361,7 +361,8 @@ async def reset_password(body: ResetPasswordIn):
     if isinstance(expires_at, str):
         expires_at = datetime.fromisoformat(expires_at)
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=TZ)
+        # Motor/PyMongo returns naive UTC datetimes for tz-aware writes
+        expires_at = expires_at.replace(tzinfo=_tz.utc)
     if now_local() > expires_at:
         raise HTTPException(status_code=400, detail="Reset link has expired")
     try:
