@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -15,7 +16,7 @@ import {
 import { toast } from "sonner";
 import {
   Sunrise, Moon, Loader2, Search, ChefHat, UtensilsCrossed, ShoppingBag,
-  CheckCircle2, Circle, RefreshCw, Package, Users, ClipboardList,
+  CheckCircle2, Circle, RefreshCw, Package, Users, ClipboardList, Radio,
 } from "lucide-react";
 
 function todayISO() {
@@ -98,16 +99,31 @@ export default function ChefDashboard() {
               Track orders live, search employees, and mark meals as served as they arrive.
             </p>
           </div>
-          <div className="flex items-end gap-3">
+          <div className="flex items-end gap-3 flex-wrap">
             <div className="space-y-2">
               <Label className="overline">Service date</Label>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11 w-[180px]" data-testid="chef-date-input" />
             </div>
-            <Button variant="outline" onClick={load} className="h-11 rounded-full gap-2" data-testid="chef-refresh-button">
+            <div className="flex items-center gap-3 rounded-full border border-border h-11 px-4" data-testid="chef-auto-refresh-wrap">
+              <Radio className={`h-3.5 w-3.5 ${autoRefresh && date === todayISO() ? "text-secondary animate-pulse" : "text-muted-foreground"}`} />
+              <Label htmlFor="auto-refresh-switch" className="text-sm cursor-pointer m-0">Live · 30s</Label>
+              <Switch
+                id="auto-refresh-switch"
+                checked={autoRefresh}
+                onCheckedChange={setAutoRefresh}
+                data-testid="chef-auto-refresh-toggle"
+              />
+            </div>
+            <Button variant="outline" onClick={() => load()} className="h-11 rounded-full gap-2" data-testid="chef-refresh-button">
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
           </div>
         </div>
+        {lastRefreshed && (
+          <div className="text-xs text-muted-foreground mb-6 font-mono-plex" data-testid="chef-last-refreshed">
+            Last updated {lastRefreshed.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+          </div>
+        )}
 
         {/* Summary grid */}
         {summary && (

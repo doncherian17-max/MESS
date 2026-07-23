@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR / ".env", override=True)
 
 import os
 import io
@@ -925,9 +925,26 @@ async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, a
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid date range")
 
-    # Prepare Excel and send via email as a link? Emergent proxy only sends HTML — no attachments here.
-    # Instead: send an HTML summary + a note that the Excel can be downloaded from the console.
+    # Build both the HTML summary AND the full xlsx. Store xlsx in Mongo keyed by
+    # a random download token — the email includes a signed one-click download link
+    # (Emergent's managed email proxy does not accept attachments directly).
     data = await admin_summary(from_date=body.from_date, to_date=body.to_date, admin=admin)
+    xlsx_bytes = await build_report_xlsx(body.from_date, body.to_date)
+
+    dl_token = secrets.token_urlsafe(24)
+    await db.report_downloads.insert_one({
+        "token": dl_token,
+        "from_date": body.from_date,
+        "to_date": body.to_date,
+        "filename": f"mess_bookings_{body.from_date}_to_{body.to_date}.xlsx",
+        "content": xlsx_bytes,
+        "created_at": now_local().isoformat(),
+        "expires_at": datetime.now(_tz.utc) + timedelta(hours=24),
+        "created_by": admin["employee_number"],
+    })
+    base = APP_URL or ""
+    dl_link = f"{base}/api/reports/download/{dl_token}"
+
     rows_html = "".join(
         f"<tr><td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['employee_number']}</td>"
         f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['name']}</td>"
@@ -943,6 +960,10 @@ async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, a
           <tr><td>
             <h2 style="margin:0 0 8px;color:#2b1e15;">MessBook — Booking Report</h2>
             <p style="color:#5a4a3d;margin:0 0 20px;">Period: <b>{body.from_date}</b> to <b>{body.to_date}</b></p>
+            <p style="margin:0 0 24px;">
+              <a href="{dl_link}" style="background:#c65a40;color:white;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600;display:inline-block;">Download full Excel report</a>
+            </p>
+            <p style="color:#8a7969;font-size:12px;margin:-16px 0 22px;">Link contains Summary + Bookings sheets. Expires in 24 hours.</p>
             <table width="100%" style="border-collapse:collapse;">
               <thead>
                 <tr style="background:#c65a40;color:white;">
@@ -963,15 +984,38 @@ async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, a
                 </tr>
               </tfoot>
             </table>
-            <p style="color:#8a7969;font-size:12px;margin-top:22px;">Sign in to the MessBook admin console to download the full Excel file (Summary + Bookings sheets).</p>
+            <p style="color:#8a7969;font-size:12px;margin-top:22px;">
+              If the button doesn't work, copy this link: <br/>
+              <span style="word-break:break-all;">{dl_link}</span>
+            </p>
           </td></tr>
         </table>
       </td></tr>
     </table>
     """
     background.add_task(send_email_async, body.email, f"MessBook Report {body.from_date} → {body.to_date}", html)
-    await audit(admin, "report.email", target=body.email, meta={"from": body.from_date, "to": body.to_date})
-    return {"ok": True, "message": f"Report will be emailed to {body.email}"}
+    await audit(admin, "report.email", target=body.email, meta={"from": body.from_date, "to": body.to_date, "download_token": dl_token})
+    return {"ok": True, "message": f"Report will be emailed to {body.email}", "download_link": dl_link}
+
+
+@api.get("/reports/download/{token}")
+async def download_emailed_report(token: str):
+    rec = await db.report_downloads.find_one({"token": token})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Download link is invalid or expired")
+    expires_at = rec.get("expires_at")
+    if expires_at is not None:
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=_tz.utc)
+        if datetime.now(_tz.utc) > expires_at:
+            raise HTTPException(status_code=410, detail="Download link has expired")
+    return StreamingResponse(
+        io.BytesIO(rec["content"]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{rec.get("filename", "report.xlsx")}"'},
+    )
 
 
 @api.get("/admin/audit-logs")
@@ -1051,7 +1095,11 @@ async def startup():
     await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)
     await db.audit_logs.create_index("timestamp")
     try:
-        await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=3600)
+        await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    except Exception:
+        pass
+    try:
+        await db.report_downloads.create_index("expires_at", expireAfterSeconds=0)
     except Exception:
         pass
     await seed_admin()
