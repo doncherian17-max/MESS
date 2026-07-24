@@ -10,6 +10,7 @@ import EmployeeDashboard from "@/pages/EmployeeDashboard";
 import AdminDashboard from "@/pages/AdminDashboard";
 import ChefDashboard from "@/pages/ChefDashboard";
 import RequireEmailGate from "@/components/RequireEmailGate";
+import Footer from "@/components/Footer";
 import { Toaster } from "@/components/ui/sonner";
 
 function Protected({ children, roles }) {
@@ -41,22 +42,25 @@ function RootRedirect() {
 
 export default function App() {
   return (
-    <div className="App">
+    <div className="App min-h-screen flex flex-col">
       <ThemeProvider>
         <AuthProvider>
           <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<RootRedirect />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/signup" element={<SignupPage />} />
-              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-              <Route path="/reset-password" element={<ResetPasswordPage />} />
-              <Route path="/dashboard" element={<Protected roles={["employee"]}><EmployeeDashboard /></Protected>} />
-              <Route path="/admin" element={<Protected roles={["admin"]}><AdminDashboard /></Protected>} />
-              <Route path="/chef" element={<Protected roles={["chef", "admin"]}><ChefDashboard /></Protected>} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-            <RequireEmailGate />
+            <div className="flex-1 flex flex-col">
+              <Routes>
+                <Route path="/" element={<RootRedirect />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/signup" element={<SignupPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
+                <Route path="/dashboard" element={<Protected roles={["employee"]}><EmployeeDashboard /></Protected>} />
+                <Route path="/admin" element={<Protected roles={["admin"]}><AdminDashboard /></Protected>} />
+                <Route path="/chef" element={<Protected roles={["chef", "admin"]}><ChefDashboard /></Protected>} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+              <RequireEmailGate />
+              <Footer />
+            </div>
           </BrowserRouter>
           <Toaster position="top-right" richColors />
         </AuthProvider>
