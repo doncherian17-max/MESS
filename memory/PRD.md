@@ -14,7 +14,7 @@
 - **employee** — self-signup, book/update/cancel own meals, monthly stats
 - **chef** — chef dashboard: served/pending totals, employee search, mark meal served
 - **admin** — full console: report/export/email, employees, holidays, menu, audit logs
-- Default admin: employee_number `626586`, password `admin@123` (seeded on startup).
+- Default admin: employee_number `135791`, password `admin@123` (seeded on startup). Legacy `626586` was deleted and must not be re-seeded.
 
 ## Completed features (Feb 2026)
 - [x] JWT login/register with employee_number as identifier
@@ -27,6 +27,7 @@
 - [x] Chef dashboard (served/pending, dine_in/parcel breakdown, search, mark served)
 - [x] Holiday management (blocks bookings on chosen dates for breakfast/dinner/both)
 - [x] Menu planner (per date + meal, shown on employee cards)
+- [x] Weekly Menu Management (Feb 2026) — Monday–Sunday recurring template with separate breakfast & dinner slots, multi-line item entry, date-specific overrides winning over weekly. Chef dashboard displays today's resolved menu next to booking counts. Employees see today's items on booking cards.
 - [x] Audit logs (booking create/cancel/serve, employee/holiday/menu CRUD, report ops)
 - [x] Forgot / reset / change password (Resend email)
 - [x] Dark / light theme toggle
