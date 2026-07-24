@@ -21,7 +21,7 @@ import { toast } from "sonner";
 import {
   Download, Users, UserPlus, Sunrise, Moon, Loader2, Trash2, ShieldCheck, User as UserIcon,
   Calendar as CalendarIcon, ChefHat, PartyPopper, Plus, ClipboardList, Mail, ScrollText,
-  BarChart3, Upload, FileDown, Trophy, Settings2,
+  BarChart3, Upload, FileDown, Trophy, Settings2, Pencil,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -80,6 +80,11 @@ export default function AdminDashboard() {
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Edit employee (email/name)
+  const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({ email: "", name: "" });
+  const [editBusy, setEditBusy] = useState(false);
 
   const loadTop = async () => {
     try {
@@ -210,6 +215,35 @@ export default function AdminDashboard() {
       toast.success("Employee removed");
       await loadTop();
     } catch (err) { toast.error(formatApiError(err)); }
+  };
+
+  const openEdit = (u) => {
+    setEditUser(u);
+    setEditForm({ email: u.email || "", name: u.name || "" });
+  };
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    if (!editUser) return;
+    setEditBusy(true);
+    try {
+      const payload = {};
+      if (editForm.email.trim() && editForm.email.trim().toLowerCase() !== (editUser.email || "").toLowerCase()) {
+        payload.email = editForm.email.trim();
+      }
+      if (editForm.name.trim() && editForm.name.trim() !== editUser.name) {
+        payload.name = editForm.name.trim();
+      }
+      if (Object.keys(payload).length === 0) {
+        toast.info("Nothing changed");
+        setEditUser(null);
+        return;
+      }
+      await client.patch(`/admin/employees/${editUser.id}`, payload);
+      toast.success(`Updated ${editUser.employee_number}`);
+      setEditUser(null);
+      await loadTop();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setEditBusy(false); }
   };
 
   // Holidays
@@ -653,14 +687,20 @@ export default function AdminDashboard() {
                             )}
                           </TableCell>
                           <TableCell className="text-right">
-                            {u.role === "admin" ? (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            ) : (
-                              <Button variant="ghost" size="sm" onClick={() => deleteEmployee(u.id, u.employee_number)}
-                                data-testid={`delete-employee-${u.employee_number}`} className="text-destructive hover:text-destructive">
-                                <Trash2 className="h-4 w-4" />
+                            <div className="inline-flex items-center gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => openEdit(u)}
+                                data-testid={`edit-employee-${u.employee_number}`} className="rounded-full">
+                                <Pencil className="h-4 w-4" />
                               </Button>
-                            )}
+                              {u.role === "admin" ? (
+                                <span className="text-xs text-muted-foreground w-8 text-center">—</span>
+                              ) : (
+                                <Button variant="ghost" size="sm" onClick={() => deleteEmployee(u.id, u.employee_number)}
+                                  data-testid={`delete-employee-${u.employee_number}`} className="text-destructive hover:text-destructive rounded-full">
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -850,6 +890,39 @@ export default function AdminDashboard() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* Edit employee dialog (email / name) */}
+        <Dialog open={!!editUser} onOpenChange={(v) => { if (!v) setEditUser(null); }}>
+          <DialogContent data-testid="edit-employee-dialog">
+            <DialogHeader>
+              <DialogTitle>Edit employee</DialogTitle>
+              <DialogDescription>
+                Update contact details for <span className="font-mono-plex">#{editUser?.employee_number}</span>. Employees receive cancellation notices and password-reset links at their email on file.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={submitEdit} className="space-y-4">
+              <div className="space-y-2">
+                <Label className="overline">Full name</Label>
+                <Input value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  data-testid="edit-employee-name-input" className="h-11" />
+              </div>
+              <div className="space-y-2">
+                <Label className="overline">Email</Label>
+                <Input type="email" value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  placeholder="user@company.com"
+                  data-testid="edit-employee-email-input" className="h-11" />
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="ghost" onClick={() => setEditUser(null)}>Cancel</Button>
+                <Button type="submit" disabled={editBusy} data-testid="edit-employee-submit">
+                  {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

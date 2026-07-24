@@ -724,6 +724,43 @@ async def admin_create_employee(body: AdminCreateEmployeeIn, admin: dict = Depen
     return user_public(doc)
 
 
+class AdminUpdateEmployeeIn(BaseModel):
+    email: Optional[EmailStr] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    role: Optional[Literal["employee", "admin", "chef"]] = None
+
+
+@api.patch("/admin/employees/{user_id}")
+async def admin_update_employee(user_id: str, body: AdminUpdateEmployeeIn, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    target = await db.users.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    updates: dict = {}
+    if body.email is not None:
+        updates["email"] = body.email.lower()
+    if body.name is not None:
+        updates["name"] = body.name.strip()
+    if body.role is not None:
+        # Prevent admin from demoting themselves
+        if str(oid) == str(admin["_id"]) and body.role != "admin":
+            raise HTTPException(status_code=400, detail="Cannot change your own role")
+        updates["role"] = body.role
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    await db.users.update_one({"_id": oid}, {"$set": updates})
+    # Propagate name change to future audit / booking snapshots — we intentionally do NOT
+    # rewrite existing booking snapshots (they're historical facts).
+    await audit(admin, "employee.update", target=target.get("employee_number", ""), meta=updates)
+    target.update(updates)
+    return user_public(target)
+
+
 @api.delete("/admin/employees/{user_id}")
 async def admin_delete_employee(user_id: str, admin: dict = Depends(get_admin_user)):
     try:
