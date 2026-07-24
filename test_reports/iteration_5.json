@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 5 retest — regression fix for iter-4 bug 'employee can't re-book after admin reopens emergency cancellation'. Confirmed FIXED. Created /app/backend/tests/test_iteration5_rebook_after_reopen.py (5 targeted tests, all pass). Also re-ran the full iteration_4 suite (13/13 pass) as a regression check — no side effects. Verified: (1) Book -> emergency-cancel (applies_to=all) -> reopen -> POST /api/bookings for the SAME (date, meal, qty=2, dine_in) returns 200 with the SAME booking id (row revived, not re-inserted); (2) Re-booked meal is included in /admin/bookings (qty=2) and /admin/summary aggregates (dinner_dine_in=2, total_dinner_dine_in=2); (3) A brand-new (unaffected) employee can book normally on a different date; (4) While the emergency cancellation is STILL ACTIVE, POST /api/bookings returns 400 with the cancellation reason ('Bookings for this dinner are closed by admin: <reason>'). Cleanup deletes bookings and test users at end of run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5_rebook_after_reopen.py",
+    "/app/test_reports/pytest/iteration5.xml",
+    "/app/backend/tests/test_iteration4.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py create_booking (lines 527-549): the revive path is clean — it correctly checks existing.status == 'emergency_cancelled', $sets status='active' + new qty/type/created_at, $unsets cancelled_at/cancelled_by, and emits an 'booking.rebook_after_reopen' audit event. Returns 200 with the SAME booking id (preserving the row given the unique index on user_id+meal_type+meal_date).",
+    "server.py is now ~1883 lines — same recommendation from iter 3/4: split into modules (auth, bookings, admin, reports, email, emergency).",
+    "Cancellation model remains mixed: emergency cancellations soft-cancel (status='emergency_cancelled') but /admin/cancel-day still hard-deletes. Now that soft-cancel has a revive path, hard-delete inconsistency is more noticeable. Consider unifying to soft-cancel with revive across all admin cancellations.",
+    "Audit event 'booking.rebook_after_reopen' is emitted, but no corresponding event is added to cancellation_events. Not a bug — the reopen event was already logged when admin ran /reopen — but worth documenting so it's clear where to trace re-books from."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5_rebook_after_reopen.py (created)",
+    "/app/test_reports/pytest/iteration5.xml (generated)"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5 iter5 retest + 13/13 iter4 regression)",
+    "frontend": "not tested (per review_request testing_type = backend only)"
+  },
+  "test_credentials": "Admin 135791 / admin@123 (seeded). No credential changes.",
+  "seed_data_creation": "Test file creates 3 IT5* employees per run (unique 6-char suffix). Creates 2 emergency cancellations: one dinner on today+5 (reopened during test), one dinner on today+6 (reopened at end of test). All employees, bookings, and cancellations are best-effort cleaned up at the end via test_zz_cleanup. Idempotent across runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run backend retest with: `REACT_APP_BACKEND_URL=<url> python -m pytest /app/backend/tests/test_iteration5_rebook_after_reopen.py -v -o addopts=''`. All 5 tests should pass in ~3s. The iter-4 minor bug is fully resolved. Note: backend supports only meal_type in {breakfast, dinner} (NO 'lunch'). Breakfast has opens_at = day-before at 10:00 AM which affects test date selection; dinner has no opens window so we use dinner in future dates for isolated tests. /admin/summary uses query params `from` and `to` (Pydantic aliases), and returns { employees: [...], total_breakfast_..., total_dinner_... }. /admin/bookings uses single `date` param (not range).",
+  "rca of the issue": "Was fixed correctly. Root cause of the original iter-4 bug: create_booking's existing-check (`await db.bookings.find_one({user_id, meal_type, meal_date})`) did not filter status, so a soft-cancelled row (status='emergency_cancelled') after emergency-cancel triggered the 'already booked' 400 even after the admin reopened the emergency. The unique index on (user_id, meal_type, meal_date) prevented a fresh insert. The applied fix at /app/backend/server.py:532-548: if the existing row has status=='emergency_cancelled', $set status='active' + new quantity/booking_type/created_at, $unset cancelled_at/cancelled_by, emit audit 'booking.rebook_after_reopen', and return the SAME booking id as success. This preserves the unique index invariant, re-enables aggregation inclusion (all aggregation pipelines filter status != 'emergency_cancelled'), and behaves indistinguishably from a fresh booking to the caller. Verified end-to-end in all 5 retest cases."
+}

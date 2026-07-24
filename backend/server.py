@@ -530,6 +530,22 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
         "meal_date": body.meal_date,
     })
     if existing:
+        if existing.get("status") == "emergency_cancelled":
+            # Revive the soft-cancelled row instead of erroring — happens after admin reopens the emergency
+            await db.bookings.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {
+                    "status": "active",
+                    "quantity": body.quantity,
+                    "booking_type": body.booking_type,
+                    "created_at": now.isoformat(),
+                }, "$unset": {"cancelled_at": "", "cancelled_by": ""}},
+            )
+            await audit(user, "booking.rebook_after_reopen", target=str(existing["_id"]),
+                        meta={"meal_type": body.meal_type, "meal_date": body.meal_date,
+                              "qty": body.quantity, "type": body.booking_type})
+            return {"id": str(existing["_id"]), "meal_type": body.meal_type, "meal_date": body.meal_date,
+                    "quantity": body.quantity, "booking_type": body.booking_type}
         raise HTTPException(status_code=400, detail="You have already booked this meal. You can update or cancel it.")
 
     doc = {
