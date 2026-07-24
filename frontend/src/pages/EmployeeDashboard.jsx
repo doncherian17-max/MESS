@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import {
   Sunrise, Moon, Clock, CheckCircle2, XCircle, Loader2, CalendarCheck2, TrendingUp,
   UtensilsCrossed, ShoppingBag, Plus, Minus, PartyPopper, ChefHat, Package, Lock,
+  AlertOctagon, ShieldAlert,
 } from "lucide-react";
 
 function fmtDate(iso) {
@@ -171,6 +172,7 @@ export default function EmployeeDashboard() {
   const [menuMap, setMenuMap] = useState({});
   const [summary, setSummary] = useState(null);
   const [holidays, setHolidays] = useState([]);
+  const [cancellations, setCancellations] = useState([]);
   const [busyKey, setBusyKey] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -182,14 +184,16 @@ export default function EmployeeDashboard() {
   const load = async () => {
     setLoading(true);
     try {
-      const [s, m, h] = await Promise.all([
+      const [s, m, h, c] = await Promise.all([
         client.get("/bookings/status"),
         client.get(`/bookings/mine?month=${month}`),
         client.get("/holidays"),
+        client.get(`/bookings/cancellations?month=${month}`),
       ]);
       setStatus(s.data);
       setSummary(m.data);
       setHolidays(h.data);
+      setCancellations(c.data.items || []);
       // Load menu for each meal card date
       const map = {};
       await Promise.all(s.data.items.map(async (it) => {
@@ -326,6 +330,49 @@ export default function EmployeeDashboard() {
                 </Card>
               </div>
             </section>
+
+            {cancellations.length > 0 && (
+              <section className="mb-10" data-testid="cancellations-section">
+                <div className="flex items-baseline justify-between mb-4">
+                  <div>
+                    <p className="overline text-muted-foreground mb-1 flex items-center gap-1.5">
+                      <ShieldAlert className="h-3 w-3 text-destructive" /> Recent cancellations
+                    </p>
+                    <h2 className="font-display text-2xl font-bold">Meals that didn&apos;t happen</h2>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {cancellations.slice(0, 5).map((c) => (
+                    <div key={c.id} className="rounded-xl border border-border p-4 bg-card" data-testid={`cancellation-${c.id}`}>
+                      <div className="flex items-start justify-between gap-4 flex-wrap">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className={`rounded-full ${c.meal_type === "breakfast" ? "border-secondary text-secondary" : "border-primary text-primary"}`}>
+                              {c.meal_type === "breakfast" ? <Sunrise className="h-3 w-3 mr-1" /> : <Moon className="h-3 w-3 mr-1" />}
+                              {c.meal_type[0].toUpperCase() + c.meal_type.slice(1)}
+                            </Badge>
+                            <span className="text-sm font-mono-plex">{fmtDate(c.meal_date)}</span>
+                            <span className="text-xs text-muted-foreground">× {c.quantity} · {c.booking_type === "parcel" ? "Parcel" : "Dine-in"}</span>
+                          </div>
+                          {c.reason && (
+                            <div className="mt-2 text-sm text-muted-foreground italic">
+                              &ldquo;{c.reason}&rdquo;
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground text-right">
+                          <div>Cancelled by <span className="font-medium">{c.actor_role === "admin" ? "admin" : "you"}</span></div>
+                          <div className="font-mono-plex">{fmtDateTime(c.cancelled_at)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {cancellations.length > 5 && (
+                    <div className="text-xs text-muted-foreground text-center">+{cancellations.length - 5} more this month</div>
+                  )}
+                </div>
+              </section>
+            )}
 
             <section data-testid="history-section">
               <div className="flex items-baseline justify-between mb-4">

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import AdminBookingsTab from "@/components/AdminBookingsTab";
+import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import {
   Download, Users, UserPlus, Sunrise, Moon, Loader2, Trash2, ShieldCheck, User as UserIcon,
@@ -81,9 +82,9 @@ export default function AdminDashboard() {
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  // Edit employee (email/name)
+  // Edit employee (email/name/password)
   const [editUser, setEditUser] = useState(null);
-  const [editForm, setEditForm] = useState({ email: "", name: "" });
+  const [editForm, setEditForm] = useState({ email: "", name: "", password: "" });
   const [editBusy, setEditBusy] = useState(false);
 
   const loadTop = async () => {
@@ -217,9 +218,23 @@ export default function AdminDashboard() {
     } catch (err) { toast.error(formatApiError(err)); }
   };
 
+  const sendResetEmail = async () => {
+    if (!editUser) return;
+    if (!editUser.email && !editForm.email.trim()) {
+      toast.error("This user has no email — set one first."); return;
+    }
+    if (!window.confirm(`Email a password-reset link to ${editUser.email || editForm.email}?`)) return;
+    setEditBusy(true);
+    try {
+      const { data } = await client.post(`/admin/employees/${editUser.id}/send-reset-email`);
+      toast.success(`Reset link sent to ${data.sent_to}`);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setEditBusy(false); }
+  };
+
   const openEdit = (u) => {
     setEditUser(u);
-    setEditForm({ email: u.email || "", name: u.name || "" });
+    setEditForm({ email: u.email || "", name: u.name || "", password: "" });
   };
   const submitEdit = async (e) => {
     e.preventDefault();
@@ -233,13 +248,23 @@ export default function AdminDashboard() {
       if (editForm.name.trim() && editForm.name.trim() !== editUser.name) {
         payload.name = editForm.name.trim();
       }
+      if (editForm.password.trim()) {
+        if (editForm.password.trim().length < 4) {
+          toast.error("Password must be at least 4 characters");
+          setEditBusy(false);
+          return;
+        }
+        payload.password = editForm.password.trim();
+      }
       if (Object.keys(payload).length === 0) {
         toast.info("Nothing changed");
         setEditUser(null);
         return;
       }
       await client.patch(`/admin/employees/${editUser.id}`, payload);
-      toast.success(`Updated ${editUser.employee_number}`);
+      toast.success(payload.password
+        ? `Password reset for #${editUser.employee_number}`
+        : `Updated ${editUser.employee_number}`);
       setEditUser(null);
       await loadTop();
     } catch (err) { toast.error(formatApiError(err)); }
@@ -376,10 +401,16 @@ export default function AdminDashboard() {
                       <div className="rounded-xl border border-border p-5">
                         <div className="overline text-muted-foreground mb-1">Range Breakfast</div>
                         <div className="font-display font-extrabold text-3xl tracking-tight" data-testid="summary-total-breakfast">{summary.total_breakfast}</div>
+                        <div className="text-xs text-muted-foreground mt-1 font-mono-plex">
+                          Dine-in {summary.total_breakfast_dine_in} · Parcel {summary.total_breakfast_parcel}
+                        </div>
                       </div>
                       <div className="rounded-xl border border-border p-5">
                         <div className="overline text-muted-foreground mb-1">Range Dinner</div>
                         <div className="font-display font-extrabold text-3xl tracking-tight" data-testid="summary-total-dinner">{summary.total_dinner}</div>
+                        <div className="text-xs text-muted-foreground mt-1 font-mono-plex">
+                          Dine-in {summary.total_dinner_dine_in} · Parcel {summary.total_dinner_parcel}
+                        </div>
                       </div>
                       <div className="rounded-xl border border-border p-5 bg-accent">
                         <div className="overline text-muted-foreground mb-1">Total meals</div>
@@ -392,20 +423,24 @@ export default function AdminDashboard() {
                           <TableRow className="bg-muted/40">
                             <TableHead className="py-4">Employee #</TableHead>
                             <TableHead>Name</TableHead>
-                            <TableHead className="text-right">Breakfast</TableHead>
-                            <TableHead className="text-right">Dinner</TableHead>
+                            <TableHead className="text-right">B · Dine-in</TableHead>
+                            <TableHead className="text-right">B · Parcel</TableHead>
+                            <TableHead className="text-right">D · Dine-in</TableHead>
+                            <TableHead className="text-right">D · Parcel</TableHead>
                             <TableHead className="text-right">Total</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {summary.employees.length === 0 ? (
-                            <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground" data-testid="summary-empty">No bookings in this range.</TableCell></TableRow>
+                            <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground" data-testid="summary-empty">No bookings in this range.</TableCell></TableRow>
                           ) : summary.employees.map((r) => (
                             <TableRow key={r.employee_number} data-testid={`summary-row-${r.employee_number}`}>
                               <TableCell className="py-4 font-mono-plex">{r.employee_number}</TableCell>
                               <TableCell>{r.name}</TableCell>
-                              <TableCell className="text-right font-mono-plex">{r.breakfast}</TableCell>
-                              <TableCell className="text-right font-mono-plex">{r.dinner}</TableCell>
+                              <TableCell className="text-right font-mono-plex" data-testid={`summary-b-dine-${r.employee_number}`}>{r.breakfast_dine_in}</TableCell>
+                              <TableCell className="text-right font-mono-plex" data-testid={`summary-b-parcel-${r.employee_number}`}>{r.breakfast_parcel}</TableCell>
+                              <TableCell className="text-right font-mono-plex" data-testid={`summary-d-dine-${r.employee_number}`}>{r.dinner_dine_in}</TableCell>
+                              <TableCell className="text-right font-mono-plex" data-testid={`summary-d-parcel-${r.employee_number}`}>{r.dinner_parcel}</TableCell>
                               <TableCell className="text-right font-mono-plex font-semibold">{r.total}</TableCell>
                             </TableRow>
                           ))}
@@ -914,11 +949,18 @@ export default function AdminDashboard() {
                   placeholder="user@company.com"
                   data-testid="edit-employee-email-input" className="h-11" />
               </div>
-              <DialogFooter>
-                <Button type="button" variant="ghost" onClick={() => setEditUser(null)}>Cancel</Button>
-                <Button type="submit" disabled={editBusy} data-testid="edit-employee-submit">
-                  {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+              <DialogFooter className="gap-2 sm:justify-between">
+                <Button type="button" variant="outline" onClick={sendResetEmail}
+                  disabled={editBusy || !editUser?.email}
+                  data-testid="edit-employee-send-reset-email" className="gap-2 rounded-full">
+                  <Mail className="h-3.5 w-3.5" /> Send reset link
                 </Button>
+                <div className="flex gap-2">
+                  <Button type="button" variant="ghost" onClick={() => setEditUser(null)}>Cancel</Button>
+                  <Button type="submit" disabled={editBusy} data-testid="edit-employee-submit">
+                    {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                  </Button>
+                </div>
               </DialogFooter>
             </form>
           </DialogContent>

@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 3 testing (MessBook): 17/17 backend tests + full frontend admin+employee UI checks all PASS. All requested features verified end-to-end: seeded admin 135791/admin@123 (role=admin), POST /api/admin/employees/{id}/send-reset-email (200 with token created; 400 when target has no email; 403 for non-admin; 400 for bad id), DELETE /api/admin/bookings/{id}?reason=&notify= writes cancellation_events (actor_role='admin') and returns {ok, emailed}, DELETE /api/bookings/{id} writes cancellation_events (actor_role='employee'), POST /api/admin/cancel-day writes one cancellation_events per booking, GET /api/bookings/cancellations?month= returns all required fields, GET /api/admin/summary now returns breakfast_dine_in/parcel + dinner_dine_in/parcel + totals, GET /api/admin/export xlsx headers are exactly the new 9 columns, POST /api/admin/email-report returns download_link and GET /api/reports/download/{token} streams xlsx. Frontend: Report tab shows B·Dine-in / B·Parcel / D·Dine-in / D·Parcel columns; edit-employee dialog has edit-employee-send-reset-email button; admin cancel booking opens cancel-booking-dialog with cancel-booking-reason Textarea, cancel-booking-notify (default ON), cancel-booking-submit; Employee dashboard shows cancellations-section with meal/date/qty/type/reason/cancelled_by/timestamp; RequireEmailGate still triggers for admin (had blank email).  Iteration 2 reset-password bug FIXED and regression test now passes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iteration3.xml",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1704 lines — recommend splitting into modules (auth.py, bookings.py, admin.py, reports.py, email.py) for maintainability once feature velocity slows.",
+    "AdminDashboard.jsx also large; the pattern of extracting AdminBookingsTab.jsx is good and could be repeated for other tabs (Employees, Report, Menu, Holidays).",
+    "DELETE /api/admin/bookings/{id} accepts `reason` and `notify` as query parameters — semantically these belong in a JSON body (the AdminCancelBookingIn model is defined but unused). Not a bug (query params work), but consider migrating to `body: AdminCancelBookingIn` for consistency with other admin write endpoints. Frontend already sends them as query params so a change would require coordinated update.",
+    "send-reset-email endpoint returns 200 even if the email dispatch to Emergent Resend proxy silently fails (task runs in background). This is by design per the review request but callers should be aware the returned `sent_to` indicates 'queued', not 'delivered'.",
+    "cancellation_events collection has no TTL / archival strategy — will grow unbounded. Consider a background purge or TTL index on `cancelled_at` if long-term operation is expected."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (created)"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17 iteration3 tests)",
+    "frontend": "100% of tested flows"
+  },
+  "test_credentials": "Admin 135791 / admin@123 (seeded). Legacy admin 626586 / admin@123 also has admin role. Test users created and cleaned up on each run. Note: admin 135791 previously had no email; I set it to admin_it3@example.com via PATCH /auth/me to bypass RequireEmailGate for UI testing.",
+  "seed_data_creation": "During run: dynamically created and deleted employees IT3* / NOMAIL* / UITEST01. One admin cancellation event (reason='UI test cancel') was written on 2026-07-25 for the UITEST01 user; UITEST01 was deleted at end of run. The cancellation_events row still exists (its user_id is now stale) — harmless for other tests but worth noting.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend suite lives in /app/backend/tests/test_iteration3.py — run with `python -m pytest /app/backend/tests/test_iteration3.py -v -o addopts=''` for serial. Tests are idempotent and clean up after themselves. The iteration 2 reset-password bug is fixed (in server.py reset_password now interprets naive Mongo datetime as UTC — verified by TestResetPasswordRegression). Admin 135791's email was set to admin_it3@example.com to bypass the required-email gate; future UI runs may need to re-set this if the DB is reset. Notes for the frontend: the RequireEmailGate takes precedence over dialogs — if seeing 'One-time step: add your email' modal blocking clicks, either fill it or PATCH /auth/me with an email first.",
+  "rca of the issue": "No new issues found in iteration 3. Iteration 2's reset-password bug (naive Mongo datetime being tagged with TZ=Asia/Kolkata instead of UTC, making expiry appear ~5.5h in the past) is now fixed at server.py reset_password: `expires_at.replace(tzinfo=_tz.utc)` is used when tzinfo is None. Verified via TestResetPasswordRegression::test_reset_password_end_to_end which now returns 200 and enables login with the new password."
+}

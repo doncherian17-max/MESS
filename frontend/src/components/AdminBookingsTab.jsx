@@ -16,8 +16,9 @@ import {
 import { toast } from "sonner";
 import {
   Sunrise, Moon, Loader2, Search, UtensilsCrossed, Package, Plus, Trash2,
-  ShieldAlert, X, User as UserIcon,
+  ShieldAlert, X, User as UserIcon, Mail,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 function todayISO() {
   const n = new Date();
@@ -35,6 +36,11 @@ export default function AdminBookingsTab({ employees }) {
   const [addOpen, setAddOpen] = useState(false);
   const [add, setAdd] = useState({ user_id: "", meal_type: "breakfast", meal_date: todayISO(), quantity: 1, booking_type: "dine_in" });
   const [addBusy, setAddBusy] = useState(false);
+
+  // Cancel single-booking dialog
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelForm, setCancelForm] = useState({ reason: "", notify: true });
+  const [cancelBusy, setCancelBusy] = useState(false);
 
   // Cancel-day dialog
   const [dayOpen, setDayOpen] = useState(false);
@@ -69,13 +75,26 @@ export default function AdminBookingsTab({ employees }) {
     finally { setAddBusy(false); }
   };
 
-  const cancelOne = async (b) => {
-    if (!window.confirm(`Cancel #${b.employee_number}'s ${b.meal_type} on ${b.meal_date}?`)) return;
+  const openCancel = (b) => {
+    setCancelTarget(b);
+    setCancelForm({ reason: "", notify: true });
+  };
+
+  const submitCancel = async (e) => {
+    e.preventDefault();
+    if (!cancelTarget) return;
+    setCancelBusy(true);
     try {
-      await client.delete(`/admin/bookings/${b.id}`);
-      toast.success("Booking cancelled");
+      const params = new URLSearchParams({
+        reason: cancelForm.reason.trim() || "Cancelled by admin",
+        notify: cancelForm.notify ? "true" : "false",
+      });
+      const { data } = await client.delete(`/admin/bookings/${cancelTarget.id}?${params.toString()}`);
+      toast.success(data.emailed ? "Booking cancelled · employee notified" : "Booking cancelled");
+      setCancelTarget(null);
       await load();
     } catch (err) { toast.error(formatApiError(err)); }
+    finally { setCancelBusy(false); }
   };
 
   const cancelDay = async (e) => {
@@ -275,8 +294,7 @@ export default function AdminBookingsTab({ employees }) {
         </div>
 
         {/* Table */}
-        <div className="rounded-xl border border-border overflow-hidden">
-          <Table>
+        <div className="rounded-xl border border-border overflow-hidden">          <Table>
             <TableHeader>
               <TableRow className="bg-muted/40">
                 <TableHead className="py-4">Employee</TableHead>
@@ -318,7 +336,7 @@ export default function AdminBookingsTab({ employees }) {
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => cancelOne(b)}
+                    <Button variant="ghost" size="sm" onClick={() => openCancel(b)}
                       data-testid={`admin-cancel-booking-${b.id}`} className="text-destructive hover:text-destructive rounded-full">
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -329,6 +347,46 @@ export default function AdminBookingsTab({ employees }) {
           </Table>
         </div>
       </CardContent>
+
+      {/* Single-booking cancel dialog */}
+      <Dialog open={!!cancelTarget} onOpenChange={(v) => { if (!v) setCancelTarget(null); }}>
+        <DialogContent data-testid="cancel-booking-dialog">
+          <DialogHeader>
+            <DialogTitle>Cancel booking</DialogTitle>
+            <DialogDescription>
+              This will cancel <b>#{cancelTarget?.employee_number}</b>&apos;s {cancelTarget?.meal_type} on <span className="font-mono-plex">{cancelTarget?.meal_date}</span> ({cancelTarget?.booking_type?.replace("_", " ")} × {cancelTarget?.quantity}). Their monthly count will update automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitCancel} className="space-y-4">
+            <div className="space-y-2">
+              <Label className="overline">Reason</Label>
+              <Textarea
+                value={cancelForm.reason}
+                onChange={(e) => setCancelForm({ ...cancelForm, reason: e.target.value })}
+                placeholder="e.g., Emergency shift change · Employee informed by phone"
+                className="min-h-[80px]"
+                data-testid="cancel-booking-reason"
+              />
+              <p className="text-xs text-muted-foreground">Left blank → &quot;Cancelled by admin&quot; is recorded.</p>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              <Checkbox
+                checked={cancelForm.notify}
+                onCheckedChange={(v) => setCancelForm({ ...cancelForm, notify: !!v })}
+                data-testid="cancel-booking-notify"
+              />
+              <span className="flex items-center gap-1.5"><Mail className="h-3.5 w-3.5" /> Email a &quot;Sorry…&quot; note to the employee</span>
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setCancelTarget(null)}>Keep</Button>
+              <Button type="submit" disabled={cancelBusy} data-testid="cancel-booking-submit"
+                className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+                {cancelBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cancel booking"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

@@ -140,6 +140,64 @@ async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict]
         logger.warning(f"audit log failed: {e}")
 
 
+async def record_cancellation(booking: dict, cancelled_by: str, actor_role: str, reason: str = ""):
+    """Log a cancellation event so employees can see which of their meals were cancelled and why."""
+    try:
+        await db.cancellation_events.insert_one({
+            "user_id": booking["user_id"],
+            "employee_number": booking.get("employee_number", ""),
+            "employee_name": booking.get("employee_name", ""),
+            "meal_type": booking["meal_type"],
+            "meal_date": booking["meal_date"],
+            "quantity": booking.get("quantity", 1),
+            "booking_type": booking.get("booking_type", "dine_in"),
+            "cancelled_by": cancelled_by,       # employee_number or "system"
+            "actor_role": actor_role,           # "employee" | "admin" | "system"
+            "reason": reason,
+            "cancelled_at": now_local().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"cancellation log failed: {e}")
+
+
+async def send_apology_email(user_doc: dict, meal_date: str, meals: list, reason: str, background: BackgroundTasks):
+    """Send a 'Sorry, your meal was cancelled' email to a single employee (async)."""
+    email = user_doc.get("email")
+    if not email:
+        return False
+    meals_html = "".join(
+        f"<li><b>{m['type'].capitalize()}</b> — {m['booking_type'].replace('_',' ').title()} × {m['qty']}</li>"
+        for m in meals
+    )
+    subject_meal = "meal" if len(meals) == 1 else "meals"
+    html = f"""
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
+      <tr><td align="center">
+        <table width="520" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
+          <tr><td>
+            <h2 style="margin:0 0 8px;color:#2b1e15;">Sorry — your {subject_meal} on {meal_date} was cancelled</h2>
+            <p style="color:#5a4a3d;margin:0 0 12px;line-height:1.6;">
+              Hi {user_doc.get('name') or 'there'}, we're sorry to let you know that the mess had to cancel the following on <b>{meal_date}</b>:
+            </p>
+            <ul style="color:#2b1e15;line-height:1.8;margin:0 0 16px;">{meals_html}</ul>
+            <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
+              <div style="line-height:1.5;">{reason or 'No additional reason provided.'}</div>
+            </div>
+            <p style="color:#8a7969;font-size:12px;margin-top:20px;">
+              Your monthly count has been adjusted automatically. Please book again if the mess reopens.
+            </p>
+            <p style="color:#5a4a3d;margin-top:20px;">— MessBook Team</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+    background.add_task(send_email_async, email,
+                        f"Sorry: your {subject_meal} on {meal_date} was cancelled", html)
+    return True
+
+
 async def send_email_async(to: str, subject: str, html: str) -> bool:
     if not EMAIL_KEY:
         logger.warning("EMERGENT_EMAIL_KEY missing — skipping email send")
@@ -524,8 +582,39 @@ async def cancel_booking(booking_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=400, detail="Cannot cancel after cutoff")
 
     await db.bookings.delete_one({"_id": ObjectId(booking_id)})
+    await record_cancellation(booking, cancelled_by=user["employee_number"],
+                              actor_role="employee", reason="Cancelled by employee")
     await audit(user, "booking.cancel", target=booking_id)
     return {"ok": True}
+
+
+@api.get("/bookings/cancellations")
+async def my_cancellations(
+    month: Optional[str] = Query(None, description="YYYY-MM to filter"),
+    user: dict = Depends(get_current_user),
+):
+    """List cancellation events for the current user (defaults to current month)."""
+    if not month:
+        n = now_local()
+        month = f"{n.year:04d}-{n.month:02d}"
+    items = []
+    cursor = db.cancellation_events.find({
+        "user_id": str(user["_id"]),
+        "meal_date": {"$regex": f"^{month}-"},
+    }).sort("cancelled_at", -1)
+    async for e in cursor:
+        items.append({
+            "id": str(e["_id"]),
+            "meal_type": e["meal_type"],
+            "meal_date": e["meal_date"],
+            "quantity": e.get("quantity", 1),
+            "booking_type": e.get("booking_type", "dine_in"),
+            "cancelled_by": e.get("cancelled_by", ""),
+            "actor_role": e.get("actor_role", ""),
+            "reason": e.get("reason", ""),
+            "cancelled_at": e.get("cancelled_at"),
+        })
+    return {"month": month, "items": items}
 
 
 @api.get("/bookings/mine")
@@ -728,6 +817,7 @@ class AdminUpdateEmployeeIn(BaseModel):
     email: Optional[EmailStr] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     role: Optional[Literal["employee", "admin", "chef"]] = None
+    password: Optional[str] = Field(default=None, min_length=4, max_length=128)
 
 
 @api.patch("/admin/employees/{user_id}")
@@ -741,23 +831,27 @@ async def admin_update_employee(user_id: str, body: AdminUpdateEmployeeIn, admin
         raise HTTPException(status_code=404, detail="Employee not found")
 
     updates: dict = {}
+    audit_meta: dict = {}
     if body.email is not None:
         updates["email"] = body.email.lower()
+        audit_meta["email"] = updates["email"]
     if body.name is not None:
         updates["name"] = body.name.strip()
+        audit_meta["name"] = updates["name"]
     if body.role is not None:
-        # Prevent admin from demoting themselves
         if str(oid) == str(admin["_id"]) and body.role != "admin":
             raise HTTPException(status_code=400, detail="Cannot change your own role")
         updates["role"] = body.role
+        audit_meta["role"] = body.role
+    if body.password is not None:
+        updates["password_hash"] = hash_password(body.password)
+        audit_meta["password_reset"] = True
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
 
     await db.users.update_one({"_id": oid}, {"$set": updates})
-    # Propagate name change to future audit / booking snapshots — we intentionally do NOT
-    # rewrite existing booking snapshots (they're historical facts).
-    await audit(admin, "employee.update", target=target.get("employee_number", ""), meta=updates)
-    target.update(updates)
+    await audit(admin, "employee.update", target=target.get("employee_number", ""), meta=audit_meta)
+    target.update({k: v for k, v in updates.items() if k != "password_hash"})
     return user_public(target)
 
 
@@ -862,29 +956,53 @@ async def admin_summary(
     pipeline = [
         {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
         {"$group": {
-            "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
+            "_id": {"emp": "$employee_number", "name": "$employee_name",
+                    "meal": "$meal_type", "type": "$booking_type"},
             "qty": {"$sum": "$quantity"},
         }},
     ]
     per_emp: dict = {}
-    total_b = total_d = 0
+    total_b_dine = total_b_parcel = total_d_dine = total_d_parcel = 0
     async for row in db.bookings.aggregate(pipeline):
         emp = row["_id"]["emp"]
         name = row["_id"].get("name") or ""
         meal = row["_id"]["meal"]
+        btype = row["_id"].get("type") or "dine_in"
         cnt = row["qty"]
         if emp not in per_emp:
-            per_emp[emp] = {"employee_number": emp, "name": name, "breakfast": 0, "dinner": 0}
-        per_emp[emp][meal] = cnt
+            per_emp[emp] = {
+                "employee_number": emp, "name": name,
+                "breakfast_dine_in": 0, "breakfast_parcel": 0,
+                "dinner_dine_in": 0, "dinner_parcel": 0,
+            }
         if meal == "breakfast":
-            total_b += cnt
+            if btype == "parcel":
+                per_emp[emp]["breakfast_parcel"] += cnt
+                total_b_parcel += cnt
+            else:
+                per_emp[emp]["breakfast_dine_in"] += cnt
+                total_b_dine += cnt
         else:
-            total_d += cnt
+            if btype == "parcel":
+                per_emp[emp]["dinner_parcel"] += cnt
+                total_d_parcel += cnt
+            else:
+                per_emp[emp]["dinner_dine_in"] += cnt
+                total_d_dine += cnt
     rows = list(per_emp.values())
     for r in rows:
+        r["breakfast"] = r["breakfast_dine_in"] + r["breakfast_parcel"]
+        r["dinner"] = r["dinner_dine_in"] + r["dinner_parcel"]
         r["total"] = r["breakfast"] + r["dinner"]
     rows.sort(key=lambda r: r["employee_number"])
-    return {"from": from_date, "to": to_date, "total_breakfast": total_b, "total_dinner": total_d, "employees": rows}
+    return {
+        "from": from_date, "to": to_date,
+        "total_breakfast": total_b_dine + total_b_parcel,
+        "total_dinner": total_d_dine + total_d_parcel,
+        "total_breakfast_dine_in": total_b_dine, "total_breakfast_parcel": total_b_parcel,
+        "total_dinner_dine_in": total_d_dine, "total_dinner_parcel": total_d_parcel,
+        "employees": rows,
+    }
 
 
 async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
@@ -893,7 +1011,12 @@ async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
     ws.title = "Summary"
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="C65A40")
-    headers = ["Employee Number", "Name", "Breakfast", "Dinner", "Total"]
+    headers = [
+        "Employee Number", "Name",
+        "Breakfast Dine-in", "Breakfast Parcel", "Breakfast Total",
+        "Dinner Dine-in", "Dinner Parcel", "Dinner Total",
+        "Grand Total",
+    ]
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = header_font; c.fill = header_fill; c.alignment = Alignment(horizontal="center")
@@ -901,7 +1024,8 @@ async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
     pipeline = [
         {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
         {"$group": {
-            "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
+            "_id": {"emp": "$employee_number", "name": "$employee_name",
+                    "meal": "$meal_type", "type": "$booking_type"},
             "qty": {"$sum": "$quantity"},
         }},
     ]
@@ -910,24 +1034,45 @@ async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
         emp = row["_id"]["emp"]
         name = row["_id"].get("name") or ""
         meal = row["_id"]["meal"]
+        btype = row["_id"].get("type") or "dine_in"
         if emp not in per_emp:
-            per_emp[emp] = {"emp": emp, "name": name, "breakfast": 0, "dinner": 0}
-        per_emp[emp][meal] = row["qty"]
+            per_emp[emp] = {
+                "emp": emp, "name": name,
+                "b_dine": 0, "b_parcel": 0, "d_dine": 0, "d_parcel": 0,
+            }
+        key = f"{'b' if meal == 'breakfast' else 'd'}_{'parcel' if btype == 'parcel' else 'dine'}"
+        per_emp[emp][key] = row["qty"]
     rows = sorted(per_emp.values(), key=lambda r: r["emp"])
     r_idx = 2
     for r in rows:
+        b_total = r["b_dine"] + r["b_parcel"]
+        d_total = r["d_dine"] + r["d_parcel"]
+        grand = b_total + d_total
         ws.cell(row=r_idx, column=1, value=r["emp"])
         ws.cell(row=r_idx, column=2, value=r["name"])
-        ws.cell(row=r_idx, column=3, value=r["breakfast"])
-        ws.cell(row=r_idx, column=4, value=r["dinner"])
-        ws.cell(row=r_idx, column=5, value=r["breakfast"] + r["dinner"])
+        ws.cell(row=r_idx, column=3, value=r["b_dine"])
+        ws.cell(row=r_idx, column=4, value=r["b_parcel"])
+        ws.cell(row=r_idx, column=5, value=b_total)
+        ws.cell(row=r_idx, column=6, value=r["d_dine"])
+        ws.cell(row=r_idx, column=7, value=r["d_parcel"])
+        ws.cell(row=r_idx, column=8, value=d_total)
+        ws.cell(row=r_idx, column=9, value=grand)
         r_idx += 1
     if rows:
         ws.cell(row=r_idx, column=1, value="TOTAL").font = Font(bold=True)
-        ws.cell(row=r_idx, column=3, value=sum(r["breakfast"] for r in rows)).font = Font(bold=True)
-        ws.cell(row=r_idx, column=4, value=sum(r["dinner"] for r in rows)).font = Font(bold=True)
-        ws.cell(row=r_idx, column=5, value=sum(r["breakfast"] + r["dinner"] for r in rows)).font = Font(bold=True)
-    for col, w in [("A", 22), ("B", 28), ("C", 14), ("D", 14), ("E", 12)]:
+        totals = {
+            3: sum(r["b_dine"] for r in rows),
+            4: sum(r["b_parcel"] for r in rows),
+            6: sum(r["d_dine"] for r in rows),
+            7: sum(r["d_parcel"] for r in rows),
+        }
+        totals[5] = totals[3] + totals[4]
+        totals[8] = totals[6] + totals[7]
+        totals[9] = totals[5] + totals[8]
+        for col, val in totals.items():
+            ws.cell(row=r_idx, column=col, value=val).font = Font(bold=True)
+    for col, w in [("A", 20), ("B", 26), ("C", 18), ("D", 18), ("E", 16),
+                   ("F", 16), ("G", 16), ("H", 14), ("I", 14)]:
         ws.column_dimensions[col].width = w
 
     ws2 = wb.create_sheet("Bookings")
@@ -1003,41 +1148,49 @@ async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, a
     dl_link = f"{base}/api/reports/download/{dl_token}"
 
     rows_html = "".join(
-        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['employee_number']}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{r['name']}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast']}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner']}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:600;'>{r['total']}</td></tr>"
+        f"<tr>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;'>{r['employee_number']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;'>{r['name']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast_dine_in']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast_parcel']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner_dine_in']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner_parcel']}</td>"
+        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;'>{r['total']}</td>"
+        f"</tr>"
         for r in data["employees"]
     )
     html = f"""
     <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
       <tr><td align="center">
-        <table width="620" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
+        <table width="700" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
           <tr><td>
             <h2 style="margin:0 0 8px;color:#2b1e15;">MessBook — Booking Report</h2>
             <p style="color:#5a4a3d;margin:0 0 20px;">Period: <b>{body.from_date}</b> to <b>{body.to_date}</b></p>
             <p style="margin:0 0 24px;">
               <a href="{dl_link}" style="background:#c65a40;color:white;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600;display:inline-block;">Download full Excel report</a>
             </p>
-            <p style="color:#8a7969;font-size:12px;margin:-16px 0 22px;">Link contains Summary + Bookings sheets. Expires in 24 hours.</p>
-            <table width="100%" style="border-collapse:collapse;">
+            <p style="color:#8a7969;font-size:12px;margin:-16px 0 22px;">Link contains Summary + Bookings sheets with parcel/dine-in breakdown. Expires in 24 hours.</p>
+            <table width="100%" style="border-collapse:collapse;font-size:13px;">
               <thead>
                 <tr style="background:#c65a40;color:white;">
-                  <th style="padding:10px;text-align:left;">Emp #</th>
-                  <th style="padding:10px;text-align:left;">Name</th>
-                  <th style="padding:10px;text-align:right;">Breakfast</th>
-                  <th style="padding:10px;text-align:right;">Dinner</th>
-                  <th style="padding:10px;text-align:right;">Total</th>
+                  <th style="padding:8px;text-align:left;">Emp #</th>
+                  <th style="padding:8px;text-align:left;">Name</th>
+                  <th style="padding:8px;text-align:right;">B · Dine-in</th>
+                  <th style="padding:8px;text-align:right;">B · Parcel</th>
+                  <th style="padding:8px;text-align:right;">D · Dine-in</th>
+                  <th style="padding:8px;text-align:right;">D · Parcel</th>
+                  <th style="padding:8px;text-align:right;">Total</th>
                 </tr>
               </thead>
-              <tbody>{rows_html or '<tr><td colspan="5" style="padding:20px;text-align:center;color:#8a7969;">No bookings in this range.</td></tr>'}</tbody>
+              <tbody>{rows_html or '<tr><td colspan="7" style="padding:20px;text-align:center;color:#8a7969;">No bookings in this range.</td></tr>'}</tbody>
               <tfoot>
                 <tr style="background:#f5efe6;font-weight:700;">
-                  <td colspan="2" style="padding:10px;">Total</td>
-                  <td style="padding:10px;text-align:right;">{data['total_breakfast']}</td>
-                  <td style="padding:10px;text-align:right;">{data['total_dinner']}</td>
-                  <td style="padding:10px;text-align:right;">{data['total_breakfast'] + data['total_dinner']}</td>
+                  <td colspan="2" style="padding:8px;">Total</td>
+                  <td style="padding:8px;text-align:right;">{data['total_breakfast_dine_in']}</td>
+                  <td style="padding:8px;text-align:right;">{data['total_breakfast_parcel']}</td>
+                  <td style="padding:8px;text-align:right;">{data['total_dinner_dine_in']}</td>
+                  <td style="padding:8px;text-align:right;">{data['total_dinner_parcel']}</td>
+                  <td style="padding:8px;text-align:right;">{data['total_breakfast'] + data['total_dinner']}</td>
                 </tr>
               </tfoot>
             </table>
@@ -1311,9 +1464,17 @@ async def admin_create_booking(body: AdminBookingIn, admin: dict = Depends(get_a
     return {"id": str(res.inserted_id), "created": True}
 
 
+class AdminCancelBookingIn(BaseModel):
+    reason: str = Field(default="Cancelled by admin", min_length=1, max_length=500)
+    notify: bool = True
+
+
 @api.delete("/admin/bookings/{booking_id}")
-async def admin_cancel_booking(booking_id: str, admin: dict = Depends(get_admin_user)):
-    """Force-cancel any booking, at any time (bypasses cutoff)."""
+async def admin_cancel_booking(booking_id: str, background: BackgroundTasks,
+                                admin: dict = Depends(get_admin_user),
+                                reason: str = Query("Cancelled by admin"),
+                                notify: bool = Query(True)):
+    """Force-cancel any booking. Accepts a reason (query params) and optionally emails the employee."""
     try:
         oid = ObjectId(booking_id)
     except Exception:
@@ -1321,11 +1482,70 @@ async def admin_cancel_booking(booking_id: str, admin: dict = Depends(get_admin_
     booking = await db.bookings.find_one({"_id": oid})
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
+    reason_txt = (reason or "Cancelled by admin").strip() or "Cancelled by admin"
     await db.bookings.delete_one({"_id": oid})
+    await record_cancellation(booking, cancelled_by=admin["employee_number"],
+                              actor_role="admin", reason=reason_txt)
+    emailed = False
+    if notify:
+        try:
+            target = await db.users.find_one({"_id": ObjectId(booking["user_id"])})
+        except Exception:
+            target = None
+        if target:
+            emailed = await send_apology_email(
+                target, booking["meal_date"],
+                [{"type": booking["meal_type"], "qty": booking.get("quantity", 1),
+                  "booking_type": booking.get("booking_type", "dine_in")}],
+                reason_txt, background,
+            )
     await audit(admin, "admin.booking.cancel", target=booking_id,
-                meta={"emp": booking.get("employee_number", ""),
-                      "meal": booking["meal_type"], "date": booking["meal_date"]})
-    return {"ok": True}
+                meta={"emp": booking.get("employee_number", ""), "meal": booking["meal_type"],
+                      "date": booking["meal_date"], "reason": reason_txt, "emailed": emailed})
+    return {"ok": True, "emailed": emailed}
+
+
+@api.post("/admin/employees/{user_id}/send-reset-email")
+async def admin_send_reset_email(user_id: str, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
+    """Trigger a password-reset email for a user (uses the same Resend flow as /auth/forgot-password)."""
+    try:
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user id")
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if not target.get("email"):
+        raise HTTPException(status_code=400, detail="Employee has no email on file")
+
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({
+        "user_id": str(target["_id"]),
+        "token": token,
+        "expires_at": now_local() + timedelta(hours=1),
+        "used": False,
+    })
+    base = APP_URL or ""
+    reset_link = f"{base}/reset-password?token={token}"
+    html = f"""
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:32px 0;">
+      <tr><td align="center">
+        <table width="480" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:32px;">
+          <tr><td>
+            <h2 style="margin:0 0 12px;color:#2b1e15;">Password reset requested by administrator</h2>
+            <p style="color:#5a4a3d;line-height:1.6;">Hi {target.get('name') or 'there'}, a MessBook administrator has triggered a password reset for employee <b>{target['employee_number']}</b>. Use the link below to choose a new password. The link expires in 1 hour.</p>
+            <p style="margin:28px 0;">
+              <a href="{reset_link}" style="background:#c65a40;color:white;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600;">Reset password</a>
+            </p>
+            <p style="color:#8a7969;font-size:13px;">If the button doesn't work, paste this link in your browser:<br/><span style="word-break:break-all;">{reset_link}</span></p>
+            <p style="color:#8a7969;font-size:13px;margin-top:20px;">If you didn't expect this, please contact your mess administrator.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+    """
+    background.add_task(send_email_async, target["email"], "Reset your MessBook password", html)
+    await audit(admin, "admin.password_reset_email", target=target["employee_number"], meta={"to": target["email"]})
+    return {"ok": True, "sent_to": target["email"]}
 
 
 @api.post("/admin/cancel-day")
@@ -1357,6 +1577,9 @@ async def admin_cancel_day(body: DayCancelIn, background: BackgroundTasks, admin
         per_user[uid]["meals"].append({
             "type": b["meal_type"], "qty": b.get("quantity", 1), "booking_type": b.get("booking_type", "dine_in"),
         })
+        # Log per-booking cancellation event
+        await record_cancellation(b, cancelled_by=admin["employee_number"],
+                                  actor_role="admin", reason=body.reason)
 
     # Delete bookings
     deleted = 0
@@ -1364,62 +1587,28 @@ async def admin_cancel_day(body: DayCancelIn, background: BackgroundTasks, admin
         res = await db.bookings.delete_many(query)
         deleted = res.deleted_count
 
-    # Fetch email addresses in bulk and queue notification emails
+    # Email each affected employee via the shared helper
+    emailed = 0
     if per_user:
         try:
             user_docs = db.users.find({"_id": {"$in": [ObjectId(uid) for uid in per_user.keys()]}})
         except Exception:
             user_docs = None
-        emailed = 0
         if user_docs is not None:
             async for u in user_docs:
-                email = u.get("email")
-                if not email:
-                    continue
                 info = per_user[str(u["_id"])]
-                meals_html = "".join(
-                    f"<li><b>{m['type'].capitalize()}</b> — {m['booking_type'].replace('_',' ').title()} × {m['qty']}</li>"
-                    for m in info["meals"]
-                )
-                subject_meal = "meals" if body.meal_type == "both" else body.meal_type.capitalize()
-                html = f"""
-                <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
-                  <tr><td align="center">
-                    <table width="520" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
-                      <tr><td>
-                        <h2 style="margin:0 0 8px;color:#2b1e15;">Sorry — your {subject_meal} on {body.date} was cancelled</h2>
-                        <p style="color:#5a4a3d;margin:0 0 12px;line-height:1.6;">
-                          Hi {info['employee_name'] or 'there'}, we're sorry to let you know that the mess had to cancel
-                          the following on <b>{body.date}</b>:
-                        </p>
-                        <ul style="color:#2b1e15;line-height:1.8;margin:0 0 16px;">{meals_html}</ul>
-                        <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;">
-                          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
-                          <div style="line-height:1.5;">{body.reason}</div>
-                        </div>
-                        <p style="color:#8a7969;font-size:12px;margin-top:20px;">
-                          Your monthly count has been adjusted automatically. Please book again if the mess reopens.
-                        </p>
-                        <p style="color:#5a4a3d;margin-top:20px;">— MessBook Team</p>
-                      </td></tr>
-                    </table>
-                  </td></tr>
-                </table>
-                """
-                background.add_task(
-                    send_email_async, email,
-                    f"Sorry: your {subject_meal} on {body.date} was cancelled", html,
-                )
-                emailed += 1
-        else:
-            emailed = 0
+                sent = await send_apology_email(u, body.date, info["meals"], body.reason, background)
+                if sent:
+                    emailed += 1
 
     await audit(admin, "admin.day.cancel", target=f"{body.date}:{body.meal_type}",
-                meta={"deleted": deleted, "affected_users": len(per_user), "reason": body.reason})
+                meta={"deleted": deleted, "affected_users": len(per_user),
+                      "emailed": emailed, "reason": body.reason})
     return {
         "ok": True,
         "deleted": deleted,
         "affected_users": len(per_user),
+        "emailed": emailed,
         "affected": [
             {"employee_number": info["employee_number"], "name": info["employee_name"],
              "meals": info["meals"]} for info in per_user.values()
