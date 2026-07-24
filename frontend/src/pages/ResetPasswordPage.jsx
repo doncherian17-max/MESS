@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import { UtensilsCrossed, Loader2 } from "lucide-react";
 
@@ -48,7 +49,7 @@ export default function ResetPasswordPage() {
             <form onSubmit={submit} className="space-y-5" data-testid="reset-form">
               <div className="space-y-2">
                 <Label className="overline">New password</Label>
-                <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
+                <PasswordInput value={pw} onChange={(e) => setPw(e.target.value)}
                   required minLength={4} className="h-12" data-testid="reset-password-input" />
               </div>
               <Button type="submit" disabled={busy} data-testid="reset-submit-button"

@@ -6,6 +6,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
@@ -32,17 +33,17 @@ export default function ChangePasswordDialog({ open, onOpenChange }) {
       <DialogContent data-testid="change-password-dialog">
         <DialogHeader>
           <DialogTitle>Change password</DialogTitle>
-          <DialogDescription>Choose a new password. You'll stay signed in on this device.</DialogDescription>
+          <DialogDescription>Choose a new password. You&apos;ll stay signed in on this device.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
             <Label className="overline">Current password</Label>
-            <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+            <PasswordInput value={current} onChange={(e) => setCurrent(e.target.value)}
               required data-testid="cp-current-input" />
           </div>
           <div className="space-y-2">
             <Label className="overline">New password</Label>
-            <Input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+            <PasswordInput value={next} onChange={(e) => setNext(e.target.value)}
               required minLength={4} data-testid="cp-new-input" />
           </div>
           <DialogFooter>

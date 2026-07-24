@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner";
 import {
   Sunrise, Moon, Clock, CheckCircle2, XCircle, Loader2, CalendarCheck2, TrendingUp,
-  UtensilsCrossed, ShoppingBag, Plus, Minus, PartyPopper, ChefHat, Package,
+  UtensilsCrossed, ShoppingBag, Plus, Minus, PartyPopper, ChefHat, Package, Lock,
 } from "lucide-react";
 
 function fmtDate(iso) {
@@ -45,7 +45,8 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
   }, [item.booking_id, item.booked, item.quantity, item.booking_type]);
 
   const holiday = item.holiday;
-  const disabled = item.cutoff_passed || !!holiday;
+  const notYetOpen = !!item.not_yet_open;
+  const disabled = item.cutoff_passed || !!holiday || notYetOpen;
 
   return (
     <Card className={`${colorClass} card-lift border-border overflow-hidden`} data-testid={`meal-card-${item.meal_type}`}>
@@ -88,7 +89,13 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
 
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-5">
           <Clock className="h-4 w-4" />
-          <span>Cutoff: <span className="font-mono-plex text-foreground">{fmtDateTime(item.cutoff)}</span></span>
+          <span>
+            {item.opens_at ? (
+              <>Window: <span className="font-mono-plex text-foreground">{fmtDateTime(item.opens_at)}</span> → <span className="font-mono-plex text-foreground">{fmtDateTime(item.cutoff)}</span></>
+            ) : (
+              <>Cutoff: <span className="font-mono-plex text-foreground">{fmtDateTime(item.cutoff)}</span></>
+            )}
+          </span>
         </div>
 
         {!disabled && (
@@ -146,7 +153,10 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
             className="w-full h-11 rounded-full font-semibold"
             style={{ backgroundColor: `hsl(var(--meal-color))`, color: "white" }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : (
-              holiday ? "Holiday — closed" : item.cutoff_passed ? "Cutoff passed" : `Book ${label} (${qty})`
+              holiday ? "Holiday — closed"
+                : notYetOpen ? `Opens ${fmtDateTime(item.opens_at)}`
+                : item.cutoff_passed ? "Cutoff passed"
+                : `Book ${label} (${qty})`
             )}
           </Button>
         )}
@@ -243,7 +253,7 @@ export default function EmployeeDashboard() {
             What&apos;s on the menu today?
           </h1>
           <p className="text-muted-foreground mt-3 max-w-xl leading-relaxed">
-            Book tomorrow&apos;s breakfast before 11:30 PM, and today&apos;s dinner before 2:30 PM. Simple.
+            Book tomorrow&apos;s breakfast between 10:00 AM and 11:30 PM. Today&apos;s dinner closes at 2:30 PM. Simple.
           </p>
         </div>
 

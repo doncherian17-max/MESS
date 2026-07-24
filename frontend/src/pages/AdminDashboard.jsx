@@ -16,11 +16,12 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import AdminBookingsTab from "@/components/AdminBookingsTab";
 import { toast } from "sonner";
 import {
   Download, Users, UserPlus, Sunrise, Moon, Loader2, Trash2, ShieldCheck, User as UserIcon,
   Calendar as CalendarIcon, ChefHat, PartyPopper, Plus, ClipboardList, Mail, ScrollText,
-  BarChart3, Upload, FileDown, Trophy,
+  BarChart3, Upload, FileDown, Trophy, Settings2,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -289,6 +290,7 @@ export default function AdminDashboard() {
           <TabsList data-testid="admin-tabs" className="flex-wrap h-auto">
             <TabsTrigger value="report" data-testid="tab-report" className="gap-1.5"><ClipboardList className="h-3.5 w-3.5" /> Report</TabsTrigger>
             <TabsTrigger value="insights" data-testid="tab-insights" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" /> Insights</TabsTrigger>
+            <TabsTrigger value="bookings" data-testid="tab-bookings" className="gap-1.5"><Settings2 className="h-3.5 w-3.5" /> Bookings</TabsTrigger>
             <TabsTrigger value="employees" data-testid="tab-employees" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Employees</TabsTrigger>
             <TabsTrigger value="holidays" data-testid="tab-holidays" className="gap-1.5"><PartyPopper className="h-3.5 w-3.5" /> Holidays</TabsTrigger>
             <TabsTrigger value="menu" data-testid="tab-menu" className="gap-1.5"><ChefHat className="h-3.5 w-3.5" /> Menu</TabsTrigger>

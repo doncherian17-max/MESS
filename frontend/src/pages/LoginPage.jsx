@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import { UtensilsCrossed, ArrowRight, Loader2 } from "lucide-react";
 
@@ -87,7 +88,7 @@ export default function LoginPage() {
                         Forgot?
                       </Link>
                     </div>
-                    <Input id="pw" data-testid="login-password-input" type="password" value={password}
+                    <PasswordInput id="pw" data-testid="login-password-input" value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Your password" autoComplete="current-password" className="h-12" required />
                   </div>

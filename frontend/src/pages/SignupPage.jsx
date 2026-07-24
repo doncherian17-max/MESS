@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import { UtensilsCrossed, Loader2, ArrowRight } from "lucide-react";
 
@@ -87,7 +88,7 @@ export default function SignupPage() {
                   </div>
                   <div className="space-y-2">
                     <Label className="overline">Password</Label>
-                    <Input data-testid="signup-password-input" type="password" value={password}
+                    <PasswordInput data-testid="signup-password-input" value={password}
                       onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 4 characters" className="h-12" required minLength={4} />
                   </div>
                   <Button type="submit" disabled={busy} data-testid="signup-submit-button"

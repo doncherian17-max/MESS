@@ -41,6 +41,10 @@ BREAKFAST_CUTOFF_MIN = 30
 DINNER_CUTOFF_HOUR = 14
 DINNER_CUTOFF_MIN = 30
 
+# Breakfast booking window opens at 10:00 on the day before the meal
+BREAKFAST_OPEN_HOUR = 10
+BREAKFAST_OPEN_MIN = 0
+
 MAX_QTY = 5
 
 # Email
@@ -110,6 +114,15 @@ def compute_cutoff(meal_type: str, meal_date: date_cls) -> datetime:
                         BREAKFAST_CUTOFF_HOUR, BREAKFAST_CUTOFF_MIN, tzinfo=TZ)
     return datetime(meal_date.year, meal_date.month, meal_date.day,
                     DINNER_CUTOFF_HOUR, DINNER_CUTOFF_MIN, tzinfo=TZ)
+
+
+def compute_opens_at(meal_type: str, meal_date: date_cls) -> Optional[datetime]:
+    """When the booking window opens. Dinner has no explicit opening — returns None."""
+    if meal_type == "breakfast":
+        open_day = meal_date - timedelta(days=1)
+        return datetime(open_day.year, open_day.month, open_day.day,
+                        BREAKFAST_OPEN_HOUR, BREAKFAST_OPEN_MIN, tzinfo=TZ)
+    return None
 
 
 async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict] = None):
@@ -390,6 +403,7 @@ async def booking_status(user: dict = Depends(get_current_user)):
     results = []
     for meal_type, meal_date in [("breakfast", tomorrow), ("dinner", today)]:
         cutoff = compute_cutoff(meal_type, meal_date)
+        opens_at = compute_opens_at(meal_type, meal_date)
         existing = await db.bookings.find_one({
             "user_id": str(user["_id"]),
             "meal_type": meal_type,
@@ -401,6 +415,8 @@ async def booking_status(user: dict = Depends(get_current_user)):
             "meal_date": meal_date.isoformat(),
             "cutoff": cutoff.isoformat(),
             "cutoff_passed": now >= cutoff,
+            "opens_at": opens_at.isoformat() if opens_at else None,
+            "not_yet_open": bool(opens_at and now < opens_at),
             "booked": bool(existing),
             "booking_id": str(existing["_id"]) if existing else None,
             "quantity": existing.get("quantity", 1) if existing else None,
@@ -419,6 +435,9 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
 
     now = now_local()
     cutoff = compute_cutoff(body.meal_type, meal_date)
+    opens_at = compute_opens_at(body.meal_type, meal_date)
+    if opens_at and now < opens_at:
+        raise HTTPException(status_code=400, detail=f"Booking opens at {opens_at.strftime('%I:%M %p on %d %b')}")
     if now >= cutoff:
         raise HTTPException(status_code=400, detail=f"Booking cutoff has passed (cutoff was {cutoff.strftime('%d %b %Y %I:%M %p')})")
     if meal_date < now.date() - timedelta(days=1):
@@ -1156,6 +1175,220 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
 
     await audit(admin, "employee.bulk_import", meta={"created": created, "skipped": len(skipped), "errors": len(errors)})
     return {"created": created, "skipped": skipped, "errors": errors}
+
+
+class AdminBookingIn(BaseModel):
+    user_id: str
+    meal_type: Literal["breakfast", "dinner"]
+    meal_date: str
+    quantity: int = Field(default=1, ge=1, le=MAX_QTY)
+    booking_type: Literal["dine_in", "parcel"] = "dine_in"
+
+
+class DayCancelIn(BaseModel):
+    date: str
+    meal_type: Literal["breakfast", "dinner", "both"] = "both"
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@api.get("/admin/bookings")
+async def admin_list_bookings(
+    date: Optional[str] = None,
+    meal_type: Optional[Literal["breakfast", "dinner"]] = None,
+    q: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    d = date or now_local().date().isoformat()
+    query: dict = {"meal_date": d}
+    if meal_type:
+        query["meal_type"] = meal_type
+    if q:
+        query["$or"] = [
+            {"employee_number": {"$regex": q, "$options": "i"}},
+            {"employee_name": {"$regex": q, "$options": "i"}},
+        ]
+    items = []
+    async for b in db.bookings.find(query).sort([("meal_type", 1), ("employee_number", 1)]):
+        items.append({
+            "id": str(b["_id"]),
+            "user_id": b["user_id"],
+            "employee_number": b["employee_number"],
+            "employee_name": b.get("employee_name", ""),
+            "meal_type": b["meal_type"],
+            "meal_date": b["meal_date"],
+            "quantity": b.get("quantity", 1),
+            "booking_type": b.get("booking_type", "dine_in"),
+            "served": b.get("served", False),
+            "created_at": b.get("created_at"),
+        })
+    return items
+
+
+@api.post("/admin/bookings")
+async def admin_create_booking(body: AdminBookingIn, admin: dict = Depends(get_admin_user)):
+    """Force-create a booking for an employee, bypassing cutoff/holiday checks (emergency override)."""
+    try:
+        parse_iso_date(body.meal_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid meal_date, use YYYY-MM-DD")
+    try:
+        target = await db.users.find_one({"_id": ObjectId(body.user_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    existing = await db.bookings.find_one({
+        "user_id": str(target["_id"]),
+        "meal_type": body.meal_type,
+        "meal_date": body.meal_date,
+    })
+    if existing:
+        # Update instead of erroring — admin override should be helpful
+        await db.bookings.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"quantity": body.quantity, "booking_type": body.booking_type}},
+        )
+        await audit(admin, "admin.booking.update", target=str(existing["_id"]),
+                    meta={"emp": target["employee_number"], "meal": body.meal_type,
+                          "date": body.meal_date, "qty": body.quantity, "type": body.booking_type})
+        return {"id": str(existing["_id"]), "updated": True}
+
+    doc = {
+        "user_id": str(target["_id"]),
+        "employee_number": target["employee_number"],
+        "employee_name": target.get("name", ""),
+        "meal_type": body.meal_type,
+        "meal_date": body.meal_date,
+        "quantity": body.quantity,
+        "booking_type": body.booking_type,
+        "served": False,
+        "served_at": None,
+        "served_by": None,
+        "created_at": now_local().isoformat(),
+        "created_by_admin": admin["employee_number"],
+    }
+    res = await db.bookings.insert_one(doc)
+    await audit(admin, "admin.booking.create", target=str(res.inserted_id),
+                meta={"emp": target["employee_number"], "meal": body.meal_type,
+                      "date": body.meal_date, "qty": body.quantity, "type": body.booking_type})
+    return {"id": str(res.inserted_id), "created": True}
+
+
+@api.delete("/admin/bookings/{booking_id}")
+async def admin_cancel_booking(booking_id: str, admin: dict = Depends(get_admin_user)):
+    """Force-cancel any booking, at any time (bypasses cutoff)."""
+    try:
+        oid = ObjectId(booking_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    booking = await db.bookings.find_one({"_id": oid})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    await db.bookings.delete_one({"_id": oid})
+    await audit(admin, "admin.booking.cancel", target=booking_id,
+                meta={"emp": booking.get("employee_number", ""),
+                      "meal": booking["meal_type"], "date": booking["meal_date"]})
+    return {"ok": True}
+
+
+@api.post("/admin/cancel-day")
+async def admin_cancel_day(body: DayCancelIn, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
+    """Cancel all bookings for a given date (breakfast, dinner, or both) with a reason,
+    and email every affected employee whose account has an email on file."""
+    try:
+        parse_iso_date(body.date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+
+    query: dict = {"meal_date": body.date}
+    if body.meal_type != "both":
+        query["meal_type"] = body.meal_type
+
+    affected_bookings = []
+    async for b in db.bookings.find(query):
+        affected_bookings.append(b)
+
+    # Notify each unique user (aggregate their cancelled meals per user)
+    per_user: dict = {}
+    for b in affected_bookings:
+        uid = b["user_id"]
+        per_user.setdefault(uid, {
+            "employee_number": b["employee_number"],
+            "employee_name": b.get("employee_name", ""),
+            "meals": [],
+        })
+        per_user[uid]["meals"].append({
+            "type": b["meal_type"], "qty": b.get("quantity", 1), "booking_type": b.get("booking_type", "dine_in"),
+        })
+
+    # Delete bookings
+    deleted = 0
+    if affected_bookings:
+        res = await db.bookings.delete_many(query)
+        deleted = res.deleted_count
+
+    # Fetch email addresses in bulk and queue notification emails
+    if per_user:
+        try:
+            user_docs = db.users.find({"_id": {"$in": [ObjectId(uid) for uid in per_user.keys()]}})
+        except Exception:
+            user_docs = None
+        emailed = 0
+        if user_docs is not None:
+            async for u in user_docs:
+                email = u.get("email")
+                if not email:
+                    continue
+                info = per_user[str(u["_id"])]
+                meals_html = "".join(
+                    f"<li><b>{m['type'].capitalize()}</b> — {m['booking_type'].replace('_',' ').title()} × {m['qty']}</li>"
+                    for m in info["meals"]
+                )
+                subject_meal = "meals" if body.meal_type == "both" else body.meal_type.capitalize()
+                html = f"""
+                <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
+                  <tr><td align="center">
+                    <table width="520" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
+                      <tr><td>
+                        <h2 style="margin:0 0 8px;color:#2b1e15;">Sorry — your {subject_meal} on {body.date} was cancelled</h2>
+                        <p style="color:#5a4a3d;margin:0 0 12px;line-height:1.6;">
+                          Hi {info['employee_name'] or 'there'}, we're sorry to let you know that the mess had to cancel
+                          the following on <b>{body.date}</b>:
+                        </p>
+                        <ul style="color:#2b1e15;line-height:1.8;margin:0 0 16px;">{meals_html}</ul>
+                        <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;">
+                          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
+                          <div style="line-height:1.5;">{body.reason}</div>
+                        </div>
+                        <p style="color:#8a7969;font-size:12px;margin-top:20px;">
+                          Your monthly count has been adjusted automatically. Please book again if the mess reopens.
+                        </p>
+                        <p style="color:#5a4a3d;margin-top:20px;">— MessBook Team</p>
+                      </td></tr>
+                    </table>
+                  </td></tr>
+                </table>
+                """
+                background.add_task(
+                    send_email_async, email,
+                    f"Sorry: your {subject_meal} on {body.date} was cancelled", html,
+                )
+                emailed += 1
+        else:
+            emailed = 0
+
+    await audit(admin, "admin.day.cancel", target=f"{body.date}:{body.meal_type}",
+                meta={"deleted": deleted, "affected_users": len(per_user), "reason": body.reason})
+    return {
+        "ok": True,
+        "deleted": deleted,
+        "affected_users": len(per_user),
+        "affected": [
+            {"employee_number": info["employee_number"], "name": info["employee_name"],
+             "meals": info["meals"]} for info in per_user.values()
+        ],
+    }
 
 
 @api.get("/admin/today")
