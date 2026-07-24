@@ -447,6 +447,21 @@ async def reset_password(body: ResetPasswordIn):
 
 
 # ---------------- Bookings ----------------
+async def is_emergency_cancelled(meal_date: str, meal_type: str, user_id: Optional[str] = None) -> Optional[dict]:
+    """Return the active emergency-cancellation record blocking this meal, if any."""
+    query = {
+        "date": meal_date,
+        "meal_type": {"$in": [meal_type, "both"]},
+        "active": True,
+    }
+    async for ec in db.emergency_cancellations.find(query):
+        if ec.get("applies_to") == "all":
+            return ec
+        if user_id and user_id in (ec.get("employee_ids") or []):
+            return ec
+    return None
+
+
 async def is_holiday(meal_date: str, meal_type: str) -> Optional[dict]:
     h = await db.holidays.find_one({"date": meal_date, "applies_to": {"$in": [meal_type, "both"]}})
     return h
@@ -504,6 +519,10 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
     holiday = await is_holiday(body.meal_date, body.meal_type)
     if holiday:
         raise HTTPException(status_code=400, detail=f"{body.meal_type.capitalize()} not available: {holiday['name']} holiday")
+
+    emerg = await is_emergency_cancelled(body.meal_date, body.meal_type, user_id=str(user["_id"]))
+    if emerg:
+        raise HTTPException(status_code=400, detail=f"Bookings for this {body.meal_type} are closed by admin: {emerg['reason']}")
 
     existing = await db.bookings.find_one({
         "user_id": str(user["_id"]),
@@ -628,6 +647,7 @@ async def my_bookings(
     cursor = db.bookings.find({
         "user_id": str(user["_id"]),
         "meal_date": {"$regex": f"^{month}-"},
+        "status": {"$ne": "emergency_cancelled"},
     }).sort("meal_date", 1)
     items = []
     b_qty = d_qty = 0
@@ -686,7 +706,7 @@ async def chef_summary(date: Optional[str] = None, u: dict = Depends(get_chef_or
     out = {"date": d, "breakfast": {}, "dinner": {}}
     for meal in ("breakfast", "dinner"):
         pipeline = [
-            {"$match": {"meal_date": d, "meal_type": meal}},
+            {"$match": {"meal_date": d, "meal_type": meal, "status": {"$ne": "emergency_cancelled"}}},
             {"$group": {
                 "_id": {"type": "$booking_type", "served": "$served"},
                 "qty": {"$sum": "$quantity"},
@@ -727,7 +747,7 @@ async def chef_bookings(
     u: dict = Depends(get_chef_or_admin),
 ):
     d = date or now_local().date().isoformat()
-    query: dict = {"meal_date": d}
+    query: dict = {"meal_date": d, "status": {"$ne": "emergency_cancelled"}}
     if meal_type:
         query["meal_type"] = meal_type
     if q:
@@ -748,6 +768,8 @@ async def chef_bookings(
             "served": b.get("served", False),
             "served_at": b.get("served_at"),
             "served_by": b.get("served_by"),
+            "admin_override": b.get("admin_override", False),
+            "override_reason": b.get("override_reason"),
         })
     return items
 
@@ -954,7 +976,7 @@ async def admin_summary(
         raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
 
     pipeline = [
-        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}, "status": {"$ne": "emergency_cancelled"}}},
         {"$group": {
             "_id": {"emp": "$employee_number", "name": "$employee_name",
                     "meal": "$meal_type", "type": "$booking_type"},
@@ -1022,7 +1044,7 @@ async def build_report_xlsx(from_date: str, to_date: str) -> bytes:
         c.font = header_font; c.fill = header_fill; c.alignment = Alignment(horizontal="center")
 
     pipeline = [
-        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}, "status": {"$ne": "emergency_cancelled"}}},
         {"$group": {
             "_id": {"emp": "$employee_number", "name": "$employee_name",
                     "meal": "$meal_type", "type": "$booking_type"},
@@ -1255,7 +1277,7 @@ async def admin_insights(days: int = Query(14, ge=1, le=90), admin: dict = Depen
     # Daily trend: one row per date + meal_type
     trend_map: dict = {}
     async for row in db.bookings.aggregate([
-        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}, "status": {"$ne": "emergency_cancelled"}}},
         {"$group": {
             "_id": {"date": "$meal_date", "meal": "$meal_type"},
             "qty": {"$sum": "$quantity"},
@@ -1280,7 +1302,7 @@ async def admin_insights(days: int = Query(14, ge=1, le=90), admin: dict = Depen
     # Top eaters over the range
     top_map: dict = {}
     async for row in db.bookings.aggregate([
-        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}}},
+        {"$match": {"meal_date": {"$gte": from_date, "$lte": to_date}, "status": {"$ne": "emergency_cancelled"}}},
         {"$group": {
             "_id": {"emp": "$employee_number", "name": "$employee_name", "meal": "$meal_type"},
             "qty": {"$sum": "$quantity"},
@@ -1380,6 +1402,23 @@ class DayCancelIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class EmergencyCancelIn(BaseModel):
+    date: str
+    meal_type: Literal["breakfast", "dinner", "both"] = "both"
+    reason: str = Field(min_length=1, max_length=500)
+    applies_to: Literal["all", "selected"] = "all"
+    employee_ids: List[str] = Field(default_factory=list)  # required when applies_to=selected
+
+
+class AdminBookingOverrideIn(BaseModel):
+    user_id: str
+    meal_type: Literal["breakfast", "dinner"]
+    meal_date: str
+    quantity: int = Field(default=1, ge=1, le=MAX_QTY)
+    booking_type: Literal["dine_in", "parcel"] = "dine_in"
+    reason: str = Field(min_length=1, max_length=500)
+
+
 @api.get("/admin/bookings")
 async def admin_list_bookings(
     date: Optional[str] = None,
@@ -1388,7 +1427,7 @@ async def admin_list_bookings(
     admin: dict = Depends(get_admin_user),
 ):
     d = date or now_local().date().isoformat()
-    query: dict = {"meal_date": d}
+    query: dict = {"meal_date": d, "status": {"$ne": "emergency_cancelled"}}
     if meal_type:
         query["meal_type"] = meal_type
     if q:
@@ -1409,13 +1448,16 @@ async def admin_list_bookings(
             "booking_type": b.get("booking_type", "dine_in"),
             "served": b.get("served", False),
             "created_at": b.get("created_at"),
+            "admin_override": b.get("admin_override", False),
+            "override_reason": b.get("override_reason"),
         })
     return items
 
 
 @api.post("/admin/bookings")
-async def admin_create_booking(body: AdminBookingIn, admin: dict = Depends(get_admin_user)):
-    """Force-create a booking for an employee, bypassing cutoff/holiday checks (emergency override)."""
+async def admin_create_booking(body: AdminBookingOverrideIn, admin: dict = Depends(get_admin_user)):
+    """Force-create a booking for an employee, bypassing cutoff/holiday/emergency checks.
+    Requires a mandatory reason. Marks the booking as an admin override."""
     try:
         parse_iso_date(body.meal_date)
     except Exception:
@@ -1433,14 +1475,20 @@ async def admin_create_booking(body: AdminBookingIn, admin: dict = Depends(get_a
         "meal_date": body.meal_date,
     })
     if existing:
-        # Update instead of erroring — admin override should be helpful
         await db.bookings.update_one(
             {"_id": existing["_id"]},
-            {"$set": {"quantity": body.quantity, "booking_type": body.booking_type}},
+            {"$set": {
+                "quantity": body.quantity, "booking_type": body.booking_type,
+                "status": "active",
+                "admin_override": True,
+                "override_reason": body.reason,
+                "override_by": admin["employee_number"],
+                "override_at": now_local().isoformat(),
+            }},
         )
-        await audit(admin, "admin.booking.update", target=str(existing["_id"]),
+        await audit(admin, "admin.booking.override_update", target=str(existing["_id"]),
                     meta={"emp": target["employee_number"], "meal": body.meal_type,
-                          "date": body.meal_date, "qty": body.quantity, "type": body.booking_type})
+                          "date": body.meal_date, "qty": body.quantity, "reason": body.reason})
         return {"id": str(existing["_id"]), "updated": True}
 
     doc = {
@@ -1451,17 +1499,131 @@ async def admin_create_booking(body: AdminBookingIn, admin: dict = Depends(get_a
         "meal_date": body.meal_date,
         "quantity": body.quantity,
         "booking_type": body.booking_type,
+        "status": "active",
         "served": False,
         "served_at": None,
         "served_by": None,
         "created_at": now_local().isoformat(),
         "created_by_admin": admin["employee_number"],
+        "admin_override": True,
+        "override_reason": body.reason,
+        "override_by": admin["employee_number"],
+        "override_at": now_local().isoformat(),
     }
     res = await db.bookings.insert_one(doc)
-    await audit(admin, "admin.booking.create", target=str(res.inserted_id),
+    await audit(admin, "admin.booking.override_create", target=str(res.inserted_id),
                 meta={"emp": target["employee_number"], "meal": body.meal_type,
-                      "date": body.meal_date, "qty": body.quantity, "type": body.booking_type})
+                      "date": body.meal_date, "qty": body.quantity, "reason": body.reason})
     return {"id": str(res.inserted_id), "created": True}
+
+
+# ---------------- Emergency Cancellations ----------------
+@api.post("/admin/emergency-cancellations")
+async def create_emergency_cancellation(body: EmergencyCancelIn, background: BackgroundTasks,
+                                         admin: dict = Depends(get_admin_user)):
+    try:
+        parse_iso_date(body.date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+    if body.applies_to == "selected" and not body.employee_ids:
+        raise HTTPException(status_code=400, detail="Select at least one employee")
+
+    meal_types = ["breakfast", "dinner"] if body.meal_type == "both" else [body.meal_type]
+    bq: dict = {"meal_date": body.date, "meal_type": {"$in": meal_types},
+                "status": {"$ne": "emergency_cancelled"}}
+    if body.applies_to == "selected":
+        bq["user_id"] = {"$in": body.employee_ids}
+
+    affected: list = []
+    async for b in db.bookings.find(bq):
+        affected.append(b)
+
+    now = now_local().isoformat()
+    if affected:
+        await db.bookings.update_many(
+            {"_id": {"$in": [b["_id"] for b in affected]}},
+            {"$set": {"status": "emergency_cancelled",
+                      "cancelled_at": now,
+                      "cancelled_by": admin["employee_number"]}}
+        )
+        for b in affected:
+            await record_cancellation(b, cancelled_by=admin["employee_number"],
+                                       actor_role="admin", reason=f"Emergency: {body.reason}")
+
+    doc = {
+        "date": body.date,
+        "meal_type": body.meal_type,
+        "reason": body.reason.strip(),
+        "applies_to": body.applies_to,
+        "employee_ids": body.employee_ids if body.applies_to == "selected" else [],
+        "active": True,
+        "affected_count": len(affected),
+        "created_by": admin["employee_number"],
+        "created_at": now,
+    }
+    res = await db.emergency_cancellations.insert_one(doc)
+
+    per_user: dict = {}
+    for b in affected:
+        per_user.setdefault(b["user_id"], []).append({
+            "type": b["meal_type"], "qty": b.get("quantity", 1),
+            "booking_type": b.get("booking_type", "dine_in"),
+        })
+    emailed = 0
+    if per_user:
+        try:
+            docs = db.users.find({"_id": {"$in": [ObjectId(u) for u in per_user.keys()]}})
+            async for u in docs:
+                meals = per_user[str(u["_id"])]
+                if await send_apology_email(u, body.date, meals, body.reason, background):
+                    emailed += 1
+        except Exception as e:
+            logger.warning(f"emergency email dispatch failed: {e}")
+
+    await audit(admin, "admin.emergency.create", target=str(res.inserted_id),
+                meta={"date": body.date, "meal": body.meal_type,
+                      "affected": len(affected), "emailed": emailed, "reason": body.reason})
+    return {"id": str(res.inserted_id), "affected": len(affected), "emailed": emailed}
+
+
+@api.get("/admin/emergency-cancellations")
+async def list_emergency_cancellations(admin: dict = Depends(get_admin_user)):
+    out = []
+    async for e in db.emergency_cancellations.find({}).sort("created_at", -1):
+        out.append({
+            "id": str(e["_id"]),
+            "date": e["date"],
+            "meal_type": e["meal_type"],
+            "reason": e.get("reason", ""),
+            "applies_to": e.get("applies_to", "all"),
+            "employee_ids": e.get("employee_ids", []),
+            "active": e.get("active", True),
+            "affected_count": e.get("affected_count", 0),
+            "created_by": e.get("created_by", ""),
+            "created_at": e.get("created_at"),
+            "reopened_at": e.get("reopened_at"),
+        })
+    return out
+
+
+@api.post("/admin/emergency-cancellations/{ec_id}/reopen")
+async def reopen_emergency_cancellation(ec_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(ec_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    e = await db.emergency_cancellations.find_one({"_id": oid})
+    if not e:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not e.get("active", True):
+        return {"ok": True, "already_reopened": True}
+    await db.emergency_cancellations.update_one(
+        {"_id": oid},
+        {"$set": {"active": False, "reopened_at": now_local().isoformat(),
+                  "reopened_by": admin["employee_number"]}},
+    )
+    await audit(admin, "admin.emergency.reopen", target=ec_id)
+    return {"ok": True}
 
 
 class AdminCancelBookingIn(BaseModel):
@@ -1623,7 +1785,8 @@ async def admin_today(admin: dict = Depends(get_admin_user)):
     tomorrow = (now.date() + timedelta(days=1)).isoformat()
 
     async def sum_qty(match: dict) -> int:
-        cur = db.bookings.aggregate([{"$match": match}, {"$group": {"_id": None, "q": {"$sum": "$quantity"}}}])
+        match_active = {**match, "status": {"$ne": "emergency_cancelled"}}
+        cur = db.bookings.aggregate([{"$match": match_active}, {"$group": {"_id": None, "q": {"$sum": "$quantity"}}}])
         async for r in cur:
             return r.get("q", 0)
         return 0

@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 4 testing (MessBook — Emergency Cancellations + Meal-count recalc + Admin Booking Override + delete-admin bug fix). 13/13 backend tests PASS. All frontend flows verified. Emergency cancellations create/list/reopen work; applies_to='selected' with empty employee_ids -> 400; blocking active cancellation prevents further POST /api/bookings for same date+meal (400 message includes reason). Aggregation exclusion verified end-to-end: booked qty=3 breakfast tomorrow -> visible in /admin/today, /admin/summary, /admin/bookings, /chef/summary, /chef/bookings, /bookings/mine, and /admin/export xlsx; after emergency-cancel all 7 aggregations drop to 0 for that booking while the row still exists in DB with status='emergency_cancelled'. Admin booking override: /admin/bookings now requires `reason` (min 1) -> 422 when missing or empty string; on success sets admin_override=true + override_reason + override_by=admin emp #; /admin/bookings and /chef/bookings return admin_override + override_reason in each item. Legacy admin 626586 login now returns 401 (deleted from DB); seeded admin 135791/admin@123 works and has role=admin. admin_delete_employee still rejects self-delete with 400 'Cannot delete yourself'. Frontend: tab-emergency present in admin dashboard; emergency-form + emergency-date/meal/applies-to/reason/submit/employees-picker all found; Selected mode reveals picker; submitting creates a new emergency-row-{id} in history; emergency-reopen-{id} button visible on active rows; force-book dialog has force-book-reason Textarea and force-book-submit is disabled when reason is empty; Employees tab shows delete-employee-135791 for the admin row (previous iteration 4 bug fix verified).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/bookings after emergency-cancellation reopen", "issue": "The affected employee cannot re-book after admin reopens the emergency cancellation. Reason: create_booking's 'existing booking' check does not filter out status='emergency_cancelled', so the soft-cancelled row blocks a new booking with 400 'You have already booked this meal.' A brand-new employee CAN book after reopen; only previously-affected users are stuck. Fresh users work fine. This somewhat undermines the 'reopen restores booking availability' guarantee for the exact users who were emergency-cancelled."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/iteration4.xml"
+  ],
+  "action_items": [
+    "Fix create_booking existing-check + unique index handling so an emergency-cancelled booking does not block a fresh booking after the emergency is reopened. Options: (a) filter existing by status:{$ne:'emergency_cancelled'} AND update the doc if a stale one is found (also requires overwriting rather than inserting due to the unique index on user_id+meal_type+meal_date), OR (b) hard-delete affected rows on reopen for the impacted (date, meal_type, user_id) tuples."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1867 lines — same recommendation as iter 3: split into modules (auth, bookings, admin, reports, email, emergency).",
+    "AdminDashboard.jsx is 985 lines — extract EmergencyCancellationsTab was good; still worth extracting EmployeesTab, HolidaysTab, MenuTab, AuditTab.",
+    "is_emergency_cancelled iterates cursor with `async for` and returns first match — fine, but a $or query with a single find_one would be cleaner: {applies_to:'all'} OR {applies_to:'selected', employee_ids: user_id}. Same behavior, less code.",
+    "In admin_create_booking the update-path sets status:'active' unconditionally, which is intentional (re-enables an emergency-cancelled booking for that employee). This is good, but should be mirrored in cancellation_events (currently we only append 'admin.booking.override_update' to audit_logs, not to cancellation_events — reasonable since it's a restore, not a cancel).",
+    "emergency cancellations soft-cancel via status field but /admin/cancel-day still hard-deletes. Inconsistent — either both should soft-cancel (for auditability) or both hard-delete. Current mixed behavior is confusing.",
+    "create_booking existing-check does NOT filter status — noted above as the reopen bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py (created)",
+    "/app/test_reports/pytest/iteration4.xml (generated)"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13 iteration4 tests)",
+    "frontend": "100% of tested flows"
+  },
+  "test_credentials": "Admin 135791 / admin@123 (seeded). Legacy admin 626586 has been DELETED from DB (login returns 401). Admin 135791's email was earlier set to admin_it3@example.com; still bypasses RequireEmailGate.",
+  "seed_data_creation": "Backend tests create IT4* employees + one CHEF (IT4C*) + one FRESH (IT4FRESH*) user, an emergency cancellation for date=today+5 (dinner, reason 'TEST list-check', then reopened), and a couple of test bookings. All are cleaned up at end of test_cleanup_iter4. Frontend test created one additional emergency cancellation for date=2099-12-30 (reason 'UI test — future placeholder') which was then reopened; still present in history but inactive. No production data touched.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run backend suite with `python -m pytest /app/backend/tests/test_iteration4.py -v -o addopts=''`. Idempotent + self-cleaning. The single known bug is: emergency-cancelled bookings block same-user re-booking after reopen (recorded above). Frontend admin dashboard has 8 tabs incl. new 'Emergency'; all data-testids match the review request. Iteration 3 admin email (admin_it3@example.com) persists on 135791.",
+  "rca of the issue": "For the reopen-then-rebook bug: server.py create_booking at line ~527 does `existing = await db.bookings.find_one({user_id, meal_type, meal_date})` with no status filter. When an emergency cancellation soft-cancels a booking (status='emergency_cancelled'), the row remains in the DB. After the admin reopens the emergency, the affected employee's POST /api/bookings finds that soft-cancelled row and returns 400 'You have already booked this meal'. The unique index on (user_id, meal_type, meal_date) also prevents inserting a second row. Fix: filter existing-check with {status:{$ne:'emergency_cancelled'}}, and on match either (a) upsert the soft-cancelled row back to status='active' with the new qty/type, or (b) delete_one first then insert."
+}

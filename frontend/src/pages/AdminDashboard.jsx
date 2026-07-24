@@ -17,12 +17,13 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import AdminBookingsTab from "@/components/AdminBookingsTab";
+import EmergencyCancellationsTab from "@/components/EmergencyCancellationsTab";
 import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import {
   Download, Users, UserPlus, Sunrise, Moon, Loader2, Trash2, ShieldCheck, User as UserIcon,
   Calendar as CalendarIcon, ChefHat, PartyPopper, Plus, ClipboardList, Mail, ScrollText,
-  BarChart3, Upload, FileDown, Trophy, Settings2, Pencil,
+  BarChart3, Upload, FileDown, Trophy, Settings2, Pencil, AlertTriangle,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -165,6 +166,13 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); /* eslint-disable-next-line */ }, []);
+
+  // Poll KPIs every 15s for near-real-time meal counts
+  useEffect(() => {
+    const id = setInterval(() => { loadTop(); }, 15000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, []);
 
   // Report actions
   const doExport = async () => {
@@ -349,6 +357,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="report" data-testid="tab-report" className="gap-1.5"><ClipboardList className="h-3.5 w-3.5" /> Report</TabsTrigger>
             <TabsTrigger value="insights" data-testid="tab-insights" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" /> Insights</TabsTrigger>
             <TabsTrigger value="bookings" data-testid="tab-bookings" className="gap-1.5"><Settings2 className="h-3.5 w-3.5" /> Bookings</TabsTrigger>
+            <TabsTrigger value="emergency" data-testid="tab-emergency" className="gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> Emergency</TabsTrigger>
             <TabsTrigger value="employees" data-testid="tab-employees" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Employees</TabsTrigger>
             <TabsTrigger value="holidays" data-testid="tab-holidays" className="gap-1.5"><PartyPopper className="h-3.5 w-3.5" /> Holidays</TabsTrigger>
             <TabsTrigger value="menu" data-testid="tab-menu" className="gap-1.5"><ChefHat className="h-3.5 w-3.5" /> Menu</TabsTrigger>
@@ -577,6 +586,14 @@ export default function AdminDashboard() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="bookings" className="pt-6">
+            <AdminBookingsTab employees={employees} />
+          </TabsContent>
+
+          <TabsContent value="emergency" className="pt-6">
+            <EmergencyCancellationsTab employees={employees} />
+          </TabsContent>
+
           {/* Employees */}
           <TabsContent value="employees" className="pt-6">
             <Card className="border-border">
@@ -727,14 +744,10 @@ export default function AdminDashboard() {
                                 data-testid={`edit-employee-${u.employee_number}`} className="rounded-full">
                                 <Pencil className="h-4 w-4" />
                               </Button>
-                              {u.role === "admin" ? (
-                                <span className="text-xs text-muted-foreground w-8 text-center">—</span>
-                              ) : (
-                                <Button variant="ghost" size="sm" onClick={() => deleteEmployee(u.id, u.employee_number)}
-                                  data-testid={`delete-employee-${u.employee_number}`} className="text-destructive hover:text-destructive rounded-full">
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              )}
+                              <Button variant="ghost" size="sm" onClick={() => deleteEmployee(u.id, u.employee_number)}
+                                data-testid={`delete-employee-${u.employee_number}`} className="text-destructive hover:text-destructive rounded-full">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>

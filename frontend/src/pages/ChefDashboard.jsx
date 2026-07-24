@@ -79,11 +79,11 @@ export default function ChefDashboard() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, mealFilter]);
 
-  // Auto-refresh every 30 seconds when viewing today and the toggle is on
+  // Auto-refresh every 10 seconds when viewing today and the toggle is on
   useEffect(() => {
     if (!autoRefresh) return;
     if (date !== todayISO()) return;
-    const id = setInterval(() => { load(true); }, 30000);
+    const id = setInterval(() => { load(true); }, 10000);
     return () => clearInterval(id);
     // eslint-disable-next-line
   }, [autoRefresh, date, mealFilter, search, knownBookingIds]);
@@ -132,7 +132,7 @@ export default function ChefDashboard() {
             </div>
             <div className="flex items-center gap-3 rounded-full border border-border h-11 px-4" data-testid="chef-auto-refresh-wrap">
               <Radio className={`h-3.5 w-3.5 ${autoRefresh && date === todayISO() ? "text-secondary animate-pulse" : "text-muted-foreground"}`} />
-              <Label htmlFor="auto-refresh-switch" className="text-sm cursor-pointer m-0">Live · 30s</Label>
+              <Label htmlFor="auto-refresh-switch" className="text-sm cursor-pointer m-0">Live · 10s</Label>
               <Switch
                 id="auto-refresh-switch"
                 checked={autoRefresh}

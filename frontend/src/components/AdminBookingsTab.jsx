@@ -34,7 +34,7 @@ export default function AdminBookingsTab({ employees }) {
 
   // Force-book dialog
   const [addOpen, setAddOpen] = useState(false);
-  const [add, setAdd] = useState({ user_id: "", meal_type: "breakfast", meal_date: todayISO(), quantity: 1, booking_type: "dine_in" });
+  const [add, setAdd] = useState({ user_id: "", meal_type: "breakfast", meal_date: todayISO(), quantity: 1, booking_type: "dine_in", reason: "" });
   const [addBusy, setAddBusy] = useState(false);
 
   // Cancel single-booking dialog
@@ -64,12 +64,13 @@ export default function AdminBookingsTab({ employees }) {
 
   const forceBook = async (e) => {
     e.preventDefault();
+    if (!add.reason.trim()) { toast.error("Reason is mandatory for admin override"); return; }
     setAddBusy(true);
     try {
       await client.post("/admin/bookings", add);
-      toast.success("Booking created (admin override)");
+      toast.success("Admin override booking saved");
       setAddOpen(false);
-      setAdd({ user_id: "", meal_type: "breakfast", meal_date: date, quantity: 1, booking_type: "dine_in" });
+      setAdd({ user_id: "", meal_type: "breakfast", meal_date: date, quantity: 1, booking_type: "dine_in", reason: "" });
       await load();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setAddBusy(false); }
@@ -245,9 +246,15 @@ export default function AdminBookingsTab({ employees }) {
                         className="h-11" data-testid="force-book-qty" />
                     </div>
                   </div>
+                  <div className="space-y-2">
+                    <Label className="overline">Override reason (mandatory)</Label>
+                    <Textarea value={add.reason} onChange={(e) => setAdd({ ...add, reason: e.target.value })}
+                      required placeholder="e.g., Employee was on emergency shift · called by phone"
+                      className="min-h-[80px]" data-testid="force-book-reason" />
+                  </div>
                   <DialogFooter>
                     <Button type="button" variant="ghost" onClick={() => setAddOpen(false)}>Cancel</Button>
-                    <Button type="submit" disabled={addBusy || !add.user_id} data-testid="force-book-submit">
+                    <Button type="submit" disabled={addBusy || !add.user_id || !add.reason.trim()} data-testid="force-book-submit">
                       {addBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
                     </Button>
                   </DialogFooter>
@@ -313,8 +320,17 @@ export default function AdminBookingsTab({ employees }) {
               ) : rows.map((b) => (
                 <TableRow key={b.id} data-testid={`admin-booking-row-${b.id}`}>
                   <TableCell className="py-4">
-                    <div className="font-medium">{b.employee_name || "—"}</div>
-                    <div className="text-xs text-muted-foreground font-mono-plex">#{b.employee_number}</div>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <div className="font-medium">{b.employee_name || "—"}</div>
+                        <div className="text-xs text-muted-foreground font-mono-plex">#{b.employee_number}</div>
+                      </div>
+                      {b.admin_override && (
+                        <Badge className="bg-primary text-primary-foreground rounded-full gap-1 text-[10px]" data-testid={`override-badge-${b.id}`}>
+                          <ShieldAlert className="h-2.5 w-2.5" /> Admin Override
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={`rounded-full ${b.meal_type === "breakfast" ? "border-secondary text-secondary" : "border-primary text-primary"}`}>
