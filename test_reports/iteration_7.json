@@ -1,0 +1,26 @@
+{
+  "summary": "Iteration 7 — Weekly Menu Management feature verified end-to-end. Backend: 13/13 pytest tests pass covering GET/PUT/DELETE /api/admin/weekly-menu (14 slots, upsert, whitespace trim, invalid-day validation, delete + repeat-delete-404, non-admin 403), GET /api/weekly-menu (14 slots, auth-required 401), GET /api/weekly-menu/today (resolves items with today's weekday), menu resolution precedence (weekly template applied when no override, date-specific override wins, fallback returns after override delete), and regression on date-specific menu CRUD. Frontend: All UI flows verified — admin Menu tab renders new 'Weekly menu' card with 7 day cards × 2 meal slots (breakfast/dinner) each with textarea + Save + trash; saving updates the '{n} items' badge and shows 'Weekly menu updated' toast; reload preserves saved items; window.confirm dialog on clear works and badge reverts to 'empty'; chef dashboard resolves today's weekly items in data-testid='chef-breakfast-menu' and data-testid='chef-dinner-menu' cards while total counters still render; employee dashboard shows 'On the menu' block with weekly-template items via data-testid='menu-dinner'. No new bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7_weekly_menu.py",
+    "/app/test_reports/pytest/iteration7.xml"
+  ],
+  "action_items": [
+    "None blocking. Feature works as specified."
+  ],
+  "critical_code_review_comments": [
+    "AdminDashboard.jsx has grown to 1125 lines (previous review already flagged this). The new Weekly Menu section (~85 lines in a single JSX block) further compounds the maintenance risk. Recommend extracting a WeeklyMenuCard.jsx component (state + JSX for a single day) and a WeeklyMenuSection.jsx wrapper.",
+    "server.py _resolve_menu_for (line 709): the date-specific override 'wins' only when items list is non-empty (`if doc and doc.get('items')`). An admin who intentionally sets a date-specific override with an empty list will silently fall back to the weekly template — which may be surprising. Consider treating any existing override doc as authoritative, or documenting the coexist rule clearly.",
+    "PUT /api/admin/weekly-menu accepts an unlimited number of items; consider capping items length and per-item length (like other endpoints) to prevent unbounded documents.",
+    "GET /api/weekly-menu/today uses server-local 'today'. If frontend and server are in different TZs, chef/employee could see the wrong weekday. Consider passing client date or documenting this."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (admin weekly save/clear/persist, chef today menu, employee menu display all verified)"},
+  "test_credentials": "Admin 135791 / admin@123 (unchanged). Iter7 test accounts: TEST_ITER7_EMP / test1234 (employee, created by test fixture), TEST_CHEF7 / chef1234 (chef, created for UI test).",
+  "seed_data_creation": "TEST_ITER7_EMP employee (test_iter7_emp@example.com) and TEST_CHEF7 chef (test_chef7@example.com) created via admin API. All weekly menu TEST_* entries created during testing were cleaned up by fixture teardown/manual DELETE calls — weekly_menus collection is empty at end of run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable pytest file at /app/backend/tests/test_iteration7_weekly_menu.py (13 tests, ~3s). Test employees TEST_ITER7_EMP (employee) and TEST_CHEF7 (chef) already exist — reuse instead of recreating. Weekly menu UI testids follow pattern weekly-{save|clear|textarea|slot|day}-{monday..sunday}[-{breakfast|dinner}]. Employee menu-{meal_type} testid, chef-{breakfast|dinner}-menu testid. Menu tab in AdminDashboard shows two cards stacked: weekly-menu-card on top, date-specific override form below (regression covered).",
+  "rca of the issue": "N/A — no bugs found. Feature implementation matches the specification (coexist mode with date-specific override winning, weekly template as fallback, empty override falls back to weekly)."
+}

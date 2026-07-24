@@ -44,6 +44,8 @@ export default function ChefDashboard() {
   const [search, setSearch] = useState("");
   const [summary, setSummary] = useState(null);
   const [bookings, setBookings] = useState([]);
+  const [menuBreakfast, setMenuBreakfast] = useState([]);
+  const [menuDinner, setMenuDinner] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -53,11 +55,16 @@ export default function ChefDashboard() {
   const load = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [s, b] = await Promise.all([
+      const [s, b, mResp] = await Promise.all([
         client.get(`/chef/summary?date=${date}`),
         client.get(`/chef/bookings?date=${date}${mealFilter !== "all" ? `&meal_type=${mealFilter}` : ""}${search ? `&q=${encodeURIComponent(search)}` : ""}`),
+        client.get(`/menu?date=${date}`),
       ]);
       setSummary(s.data);
+      const bItems = (mResp.data.find((x) => x.meal_type === "breakfast")?.items) || [];
+      const dItems = (mResp.data.find((x) => x.meal_type === "dinner")?.items) || [];
+      setMenuBreakfast(bItems);
+      setMenuDinner(dItems);
       // Detect newly-arrived bookings during silent auto-refresh
       if (silent && knownBookingIds && date === todayISO()) {
         const fresh = b.data.filter((x) => !knownBookingIds.has(x.id));
@@ -174,6 +181,14 @@ export default function ChefDashboard() {
                   <StatTile icon={Circle} label="Pending" value={summary.breakfast.pending} testId="breakfast-pending" accent />
                 </div>
                 <div className="mt-4 pt-4 border-t border-border">
+                  <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <UtensilsCrossed className="h-3 w-3" /> On the menu
+                  </div>
+                  <div className="text-sm leading-relaxed" data-testid="chef-breakfast-menu">
+                    {menuBreakfast.length > 0 ? menuBreakfast.join(" · ") : <span className="text-muted-foreground italic">No menu set</span>}
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-border">
                   <div className="flex items-baseline gap-2">
                     <span className="overline text-muted-foreground">Total meals</span>
                     <span className="font-display font-extrabold text-3xl ml-auto" data-testid="breakfast-total">{summary.breakfast.total}</span>
@@ -199,6 +214,14 @@ export default function ChefDashboard() {
                   <StatTile icon={ShoppingBag} label="Parcel" value={summary.dinner.parcel} testId="dinner-parcel" />
                   <StatTile icon={CheckCircle2} label="Served" value={summary.dinner.served} testId="dinner-served" />
                   <StatTile icon={Circle} label="Pending" value={summary.dinner.pending} testId="dinner-pending" accent />
+                </div>
+                <div className="mt-4 pt-4 border-t border-border">
+                  <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <UtensilsCrossed className="h-3 w-3" /> On the menu
+                  </div>
+                  <div className="text-sm leading-relaxed" data-testid="chef-dinner-menu">
+                    {menuDinner.length > 0 ? menuDinner.join(" · ") : <span className="text-muted-foreground italic">No menu set</span>}
+                  </div>
                 </div>
                 <div className="mt-4 pt-4 border-t border-border">
                   <div className="flex items-baseline gap-2">

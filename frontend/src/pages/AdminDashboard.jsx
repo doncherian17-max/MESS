@@ -4,6 +4,7 @@ import TopBar from "@/components/TopBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -70,6 +71,12 @@ export default function AdminDashboard() {
   const [menuBusy, setMenuBusy] = useState(false);
   const [menuDeleteBusy, setMenuDeleteBusy] = useState(null);
 
+  // Weekly menu (Mon-Sun × breakfast/dinner)
+  const [weeklyMenu, setWeeklyMenu] = useState([]);
+  const [weeklyDrafts, setWeeklyDrafts] = useState({}); // {"monday:breakfast": "text"}
+  const [weeklyBusy, setWeeklyBusy] = useState({}); // per-slot save flag
+  const [weeklyClearBusy, setWeeklyClearBusy] = useState({});
+
   // Audit logs
   const [audit, setAudit] = useState([]);
 
@@ -122,6 +129,17 @@ export default function AdminDashboard() {
       setMenuEntries(data);
     } catch (err) { toast.error(formatApiError(err)); }
   };
+  const loadWeeklyMenu = async () => {
+    try {
+      const { data } = await client.get("/admin/weekly-menu");
+      setWeeklyMenu(data);
+      const drafts = {};
+      for (const row of data) {
+        drafts[`${row.day_of_week}:${row.meal_type}`] = (row.items || []).join("\n");
+      }
+      setWeeklyDrafts(drafts);
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
   const loadAudit = async () => {
     try {
       const { data } = await client.get("/admin/audit-logs?limit=200");
@@ -166,7 +184,7 @@ export default function AdminDashboard() {
     URL.revokeObjectURL(a.href);
   };
 
-  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); /* eslint-disable-next-line */ }, []);
 
   // Poll KPIs every 15s for near-real-time meal counts
   useEffect(() => {
@@ -323,6 +341,32 @@ export default function AdminDashboard() {
       await loadMenu();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setMenuDeleteBusy(null); }
+  };
+
+  // Weekly menu
+  const saveWeeklySlot = async (dow, meal_type) => {
+    const key = `${dow}:${meal_type}`;
+    const raw = weeklyDrafts[key] || "";
+    const items = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+    setWeeklyBusy((b) => ({ ...b, [key]: true }));
+    try {
+      await client.put("/admin/weekly-menu", { day_of_week: dow, meal_type, items });
+      toast.success("Weekly menu updated");
+      await loadWeeklyMenu();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setWeeklyBusy((b) => ({ ...b, [key]: false })); }
+  };
+
+  const clearWeeklySlot = async (dow, meal_type) => {
+    if (!window.confirm(`Clear the ${meal_type} menu for ${dow}?`)) return;
+    const key = `${dow}:${meal_type}`;
+    setWeeklyClearBusy((b) => ({ ...b, [key]: true }));
+    try {
+      const { data } = await client.delete(`/admin/weekly-menu?day_of_week=${dow}&meal_type=${meal_type}`);
+      toast.success(data.message || "Cleared");
+      await loadWeeklyMenu();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setWeeklyClearBusy((b) => ({ ...b, [key]: false })); }
   };
 
   const totalMeals = useMemo(() => (summary?.total_breakfast || 0) + (summary?.total_dinner || 0), [summary]);
@@ -841,11 +885,87 @@ export default function AdminDashboard() {
 
           {/* Menu */}
           <TabsContent value="menu" className="pt-6">
+            <Card className="border-border mb-6" data-testid="weekly-menu-card">
+              <CardContent className="p-6 lg:p-8">
+                <div className="mb-6">
+                  <h3 className="font-display text-2xl font-bold">Weekly menu</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Plan a recurring Monday–Sunday menu for breakfast and dinner. This is the default menu employees and the kitchen see each day. Enter one item per line. Date-specific menus below override this template for that date.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].map((dow) => (
+                    <div key={dow} className="rounded-xl border border-border p-4 bg-card/50" data-testid={`weekly-day-${dow}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold capitalize text-lg">{dow}</h4>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {["breakfast","dinner"].map((mt) => {
+                          const key = `${dow}:${mt}`;
+                          const busy = !!weeklyBusy[key];
+                          const clearBusy = !!weeklyClearBusy[key];
+                          const draft = weeklyDrafts[key] || "";
+                          const saved = weeklyMenu.find((r) => r.day_of_week === dow && r.meal_type === mt);
+                          const savedItems = saved?.items || [];
+                          return (
+                            <div key={mt} className="space-y-2" data-testid={`weekly-slot-${dow}-${mt}`}>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className={`rounded-full ${mt === "breakfast" ? "border-secondary text-secondary" : "border-primary text-primary"}`}>
+                                  {mt === "breakfast" ? <Sunrise className="h-3 w-3 mr-1" /> : <Moon className="h-3 w-3 mr-1" />}
+                                  {mt[0].toUpperCase() + mt.slice(1)}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {savedItems.length > 0 ? `${savedItems.length} item${savedItems.length === 1 ? "" : "s"}` : "empty"}
+                                </span>
+                              </div>
+                              <Textarea
+                                value={draft}
+                                onChange={(e) => setWeeklyDrafts((d) => ({ ...d, [key]: e.target.value }))}
+                                placeholder={mt === "breakfast" ? "Idli\nSambar\nFilter Coffee" : "Chapati\nDal\nRice"}
+                                rows={4}
+                                className="font-mono text-sm"
+                                data-testid={`weekly-textarea-${dow}-${mt}`}
+                              />
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => saveWeeklySlot(dow, mt)}
+                                  disabled={busy}
+                                  data-testid={`weekly-save-${dow}-${mt}`}
+                                  className="rounded-full gap-1.5"
+                                >
+                                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                  Save
+                                </Button>
+                                {savedItems.length > 0 && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => clearWeeklySlot(dow, mt)}
+                                    disabled={clearBusy}
+                                    data-testid={`weekly-clear-${dow}-${mt}`}
+                                    className="rounded-full text-destructive hover:text-destructive"
+                                  >
+                                    {clearBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="border-border">
               <CardContent className="p-6 lg:p-8">
                 <div className="mb-6">
-                  <h3 className="font-display text-2xl font-bold">Menu planner</h3>
-                  <p className="text-sm text-muted-foreground mt-1">Set what&apos;s on the menu for each meal. Items are shown to employees on the booking cards.</p>
+                  <h3 className="font-display text-2xl font-bold">Date-specific menu overrides</h3>
+                  <p className="text-sm text-muted-foreground mt-1">Override the weekly template for specific dates (e.g., festivals or special events). If a date has no override, the weekly menu shown above is used.</p>
                 </div>
                 <form onSubmit={saveMenu} className="grid grid-cols-1 md:grid-cols-6 gap-3 mb-6 items-end">
                   <div className="space-y-2 md:col-span-2">

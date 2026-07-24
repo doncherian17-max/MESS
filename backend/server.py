@@ -281,6 +281,15 @@ class MenuIn(BaseModel):
     items: List[str] = Field(default_factory=list)
 
 
+WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+class WeeklyMenuIn(BaseModel):
+    day_of_week: Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    meal_type: Literal["breakfast", "dinner"]
+    items: List[str] = Field(default_factory=list)
+
+
 class EmailReportIn(BaseModel):
     email: EmailStr
     from_date: str
@@ -692,16 +701,63 @@ async def my_bookings(
 
 
 # ---------------- Menu (read for all authed users) ----------------
+def _weekday_key(date_str: str) -> str:
+    d = parse_iso_date(date_str)
+    return WEEKDAY_NAMES[d.weekday()]
+
+
+async def _resolve_menu_for(date_str: str, meal_type: str) -> List[str]:
+    """Resolve menu items for a date/meal. Date-specific overrides weekly template."""
+    doc = await db.menus.find_one({"date": date_str, "meal_type": meal_type})
+    if doc and doc.get("items"):
+        return doc.get("items", [])
+    dow = _weekday_key(date_str)
+    wdoc = await db.weekly_menus.find_one({"day_of_week": dow, "meal_type": meal_type})
+    if wdoc:
+        return wdoc.get("items", [])
+    return []
+
+
 @api.get("/menu")
 async def get_menu(date: str, meal_type: Optional[Literal["breakfast", "dinner"]] = None,
                    user: dict = Depends(get_current_user)):
-    q: dict = {"date": date}
-    if meal_type:
-        q["meal_type"] = meal_type
+    meals = [meal_type] if meal_type else ["breakfast", "dinner"]
     items = []
-    async for m in db.menus.find(q):
-        items.append({"date": m["date"], "meal_type": m["meal_type"], "items": m.get("items", [])})
+    for mt in meals:
+        resolved = await _resolve_menu_for(date, mt)
+        items.append({"date": date, "meal_type": mt, "items": resolved})
     return items
+
+
+@api.get("/weekly-menu")
+async def get_weekly_menu(user: dict = Depends(get_current_user)):
+    """Return the full weekly menu template (7 days x 2 meals)."""
+    out = {}
+    async for m in db.weekly_menus.find({}):
+        out[f"{m['day_of_week']}:{m['meal_type']}"] = m.get("items", [])
+    result = []
+    for dow in WEEKDAY_NAMES:
+        for mt in ("breakfast", "dinner"):
+            result.append({
+                "day_of_week": dow,
+                "meal_type": mt,
+                "items": out.get(f"{dow}:{mt}", []),
+            })
+    return result
+
+
+@api.get("/weekly-menu/today")
+async def get_weekly_menu_today(user: dict = Depends(get_current_user)):
+    """Return today's resolved menu (date-specific overrides weekly)."""
+    today = now_local().date().isoformat()
+    breakfast = await _resolve_menu_for(today, "breakfast")
+    dinner = await _resolve_menu_for(today, "dinner")
+    return {
+        "date": today,
+        "day_of_week": _weekday_key(today),
+        "breakfast": breakfast,
+        "dinner": dinner,
+    }
 
 
 @api.get("/holidays")
@@ -992,6 +1048,60 @@ async def admin_delete_menu(menu_id: str, admin: dict = Depends(get_admin_user))
                 meta={"date": existing["date"], "meal_type": existing["meal_type"],
                       "items": existing.get("items", [])})
     return {"ok": True, "message": "Menu item deleted successfully."}
+
+
+# --- Weekly Menu (admin CRUD) ---
+@api.get("/admin/weekly-menu")
+async def admin_list_weekly_menu(admin: dict = Depends(get_admin_user)):
+    """Return the weekly template with all 14 slots (fills empty ones)."""
+    out = {}
+    async for m in db.weekly_menus.find({}):
+        out[f"{m['day_of_week']}:{m['meal_type']}"] = {
+            "items": m.get("items", []),
+            "updated_at": m.get("updated_at"),
+        }
+    result = []
+    for dow in WEEKDAY_NAMES:
+        for mt in ("breakfast", "dinner"):
+            key = f"{dow}:{mt}"
+            entry = out.get(key, {"items": [], "updated_at": None})
+            result.append({
+                "day_of_week": dow,
+                "meal_type": mt,
+                "items": entry["items"],
+                "updated_at": entry["updated_at"],
+            })
+    return result
+
+
+@api.put("/admin/weekly-menu")
+async def admin_upsert_weekly_menu(body: WeeklyMenuIn, admin: dict = Depends(get_admin_user)):
+    items = [i.strip() for i in body.items if i.strip()]
+    await db.weekly_menus.update_one(
+        {"day_of_week": body.day_of_week, "meal_type": body.meal_type},
+        {"$set": {"items": items, "updated_at": now_local().isoformat()}},
+        upsert=True,
+    )
+    await audit(admin, "weekly_menu.update",
+                target=f"{body.day_of_week}:{body.meal_type}",
+                meta={"items": items})
+    return {"ok": True, "day_of_week": body.day_of_week, "meal_type": body.meal_type, "items": items}
+
+
+@api.delete("/admin/weekly-menu")
+async def admin_delete_weekly_menu(
+    day_of_week: Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+    meal_type: Literal["breakfast", "dinner"],
+    admin: dict = Depends(get_admin_user),
+):
+    existing = await db.weekly_menus.find_one({"day_of_week": day_of_week, "meal_type": meal_type})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Weekly menu slot is already empty")
+    await db.weekly_menus.delete_one({"_id": existing["_id"]})
+    await audit(admin, "weekly_menu.delete",
+                target=f"{day_of_week}:{meal_type}",
+                meta={"items": existing.get("items", [])})
+    return {"ok": True, "message": "Weekly menu cleared for this slot."}
 
 
 # --- Reports & Audit ---
@@ -1899,6 +2009,7 @@ async def startup():
     await db.bookings.create_index("meal_date")
     await db.holidays.create_index("date", unique=True)
     await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)
+    await db.weekly_menus.create_index([("day_of_week", 1), ("meal_type", 1)], unique=True)
     await db.audit_logs.create_index("timestamp")
     try:
         await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
