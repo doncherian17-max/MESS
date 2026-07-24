@@ -51,9 +51,9 @@ export default function LoginPage() {
               <span className="font-display font-bold text-xl tracking-tight">MessBook</span>
             </div>
             <div className="max-w-md">
-              <p className="overline text-white/70 mb-4">Cafeteria Ordering</p>
+              <p className="overline text-white/70 mb-4">Baratie Cafeteria</p>
               <h1 className="font-display font-extrabold text-4xl lg:text-5xl leading-tight tracking-tight">
-                Book your breakfast &amp; dinner in seconds.
+                Welcome to Baratie.
               </h1>
               <p className="mt-6 text-white/80 leading-relaxed">
                 Choose dine-in or parcel, pick your quantity, and let the kitchen prepare exactly what you need.
@@ -66,7 +66,7 @@ export default function LoginPage() {
           <div className="w-full max-w-md">
             <div className="mb-10">
               <p className="overline text-muted-foreground mb-3">Employee sign-in</p>
-              <h2 className="font-display text-4xl font-extrabold tracking-tight">Welcome back.</h2>
+              <h2 className="font-display text-4xl font-extrabold tracking-tight">Welcome to Baratie.</h2>
               <p className="text-muted-foreground mt-3 leading-relaxed">
                 Enter your employee number to book meals or view your monthly summary.
               </p>

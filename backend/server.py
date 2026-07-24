@@ -978,6 +978,22 @@ async def admin_upsert_menu(body: MenuIn, admin: dict = Depends(get_admin_user))
     return {"ok": True, "date": body.date, "meal_type": body.meal_type, "items": items}
 
 
+@api.delete("/admin/menu/{menu_id}")
+async def admin_delete_menu(menu_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(menu_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    existing = await db.menus.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+    await db.menus.delete_one({"_id": oid})
+    await audit(admin, "menu.delete", target=f"{existing['date']}:{existing['meal_type']}",
+                meta={"date": existing["date"], "meal_type": existing["meal_type"],
+                      "items": existing.get("items", [])})
+    return {"ok": True, "message": "Menu item deleted successfully."}
+
+
 # --- Reports & Audit ---
 @api.get("/admin/summary")
 async def admin_summary(
@@ -1471,9 +1487,9 @@ async def admin_list_bookings(
 
 
 @api.post("/admin/bookings")
-async def admin_create_booking(body: AdminBookingOverrideIn, admin: dict = Depends(get_admin_user)):
+async def admin_create_booking(body: AdminBookingOverrideIn, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
     """Force-create a booking for an employee, bypassing cutoff/holiday/emergency checks.
-    Requires a mandatory reason. Marks the booking as an admin override."""
+    Requires a mandatory reason. Marks the booking as an admin override and emails the employee."""
     try:
         parse_iso_date(body.meal_date)
     except Exception:
@@ -1528,8 +1544,37 @@ async def admin_create_booking(body: AdminBookingOverrideIn, admin: dict = Depen
     }
     res = await db.bookings.insert_one(doc)
     await audit(admin, "admin.booking.override_create", target=str(res.inserted_id),
-                meta={"emp": target["employee_number"], "meal": body.meal_type,
-                      "date": body.meal_date, "qty": body.quantity, "reason": body.reason})
+                meta={"admin_name": admin.get("name", ""), "employee_number": target["employee_number"],
+                      "employee_name": target.get("name", ""), "meal_date": body.meal_date,
+                      "meal_type": body.meal_type, "quantity": body.quantity,
+                      "booking_type": body.booking_type, "reason": body.reason})
+
+    # Notify the employee via email
+    if target.get("email"):
+        html = f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
+          <tr><td align="center">
+            <table width="480" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
+              <tr><td>
+                <h2 style="margin:0 0 8px;color:#2b1e15;">A booking was created for you</h2>
+                <p style="color:#5a4a3d;line-height:1.6;">Hi {target.get('name') or 'there'}, an administrator ({admin.get('name') or '#'+admin.get('employee_number','')}) has booked a meal on your behalf:</p>
+                <ul style="color:#2b1e15;line-height:1.8;">
+                  <li><b>{body.meal_type.capitalize()}</b> on {body.meal_date}</li>
+                  <li>{body.booking_type.replace('_',' ').title()} × {body.quantity}</li>
+                </ul>
+                <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;margin:16px 0;">
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
+                  <div style="line-height:1.5;">{body.reason}</div>
+                </div>
+                <p style="color:#8a7969;font-size:12px;">Sign in to Baratie to view or cancel.</p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+        """
+        background.add_task(send_email_async, target["email"],
+                            f"Booking created on your behalf — {body.meal_type.capitalize()} on {body.meal_date}", html)
+
     return {"id": str(res.inserted_id), "created": True}
 
 

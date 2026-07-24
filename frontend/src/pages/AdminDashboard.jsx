@@ -68,6 +68,7 @@ export default function AdminDashboard() {
   const [menuEntries, setMenuEntries] = useState([]);
   const [newMenu, setNewMenu] = useState({ date: todayISO(), meal_type: "breakfast", items: "" });
   const [menuBusy, setMenuBusy] = useState(false);
+  const [menuDeleteBusy, setMenuDeleteBusy] = useState(null);
 
   // Audit logs
   const [audit, setAudit] = useState([]);
@@ -311,6 +312,17 @@ export default function AdminDashboard() {
       await loadMenu();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setMenuBusy(false); }
+  };
+
+  const deleteMenu = async (m) => {
+    if (!window.confirm("Are you sure you want to delete this menu item?")) return;
+    setMenuDeleteBusy(m.id);
+    try {
+      const { data } = await client.delete(`/admin/menu/${m.id}`);
+      toast.success(data.message || "Menu item deleted successfully.");
+      await loadMenu();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setMenuDeleteBusy(null); }
   };
 
   const totalMeals = useMemo(() => (summary?.total_breakfast || 0) + (summary?.total_dinner || 0), [summary]);
@@ -868,11 +880,12 @@ export default function AdminDashboard() {
                         <TableHead className="py-4">Date</TableHead>
                         <TableHead>Meal</TableHead>
                         <TableHead>Items</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {menuEntries.length === 0 ? (
-                        <TableRow><TableCell colSpan={3} className="text-center py-10 text-muted-foreground" data-testid="menu-empty">No menu entries in the next 2 weeks.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={4} className="text-center py-10 text-muted-foreground" data-testid="menu-empty">No menu entries in the next 2 weeks.</TableCell></TableRow>
                       ) : menuEntries.map((m) => (
                         <TableRow key={m.id} data-testid={`menu-row-${m.id}`}>
                           <TableCell className="py-4 font-mono-plex">{m.date}</TableCell>
@@ -883,6 +896,13 @@ export default function AdminDashboard() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{(m.items || []).join(" · ") || "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <Button variant="ghost" size="sm" onClick={() => deleteMenu(m)}
+                              disabled={menuDeleteBusy === m.id}
+                              data-testid={`delete-menu-${m.id}`} className="text-destructive hover:text-destructive rounded-full">
+                              {menuDeleteBusy === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

@@ -35,6 +35,7 @@ export default function AdminBookingsTab({ employees }) {
   // Force-book dialog
   const [addOpen, setAddOpen] = useState(false);
   const [add, setAdd] = useState({ user_id: "", meal_type: "breakfast", meal_date: todayISO(), quantity: 1, booking_type: "dine_in", reason: "" });
+  const [empQuery, setEmpQuery] = useState("");
   const [addBusy, setAddBusy] = useState(false);
 
   // Cancel single-booking dialog
@@ -65,12 +66,19 @@ export default function AdminBookingsTab({ employees }) {
   const forceBook = async (e) => {
     e.preventDefault();
     if (!add.reason.trim()) { toast.error("Reason is mandatory for admin override"); return; }
+    if (!add.user_id) { toast.error("Select an employee"); return; }
     setAddBusy(true);
     try {
-      await client.post("/admin/bookings", add);
-      toast.success("Admin override booking saved");
+      const meals = add.meal_type === "both" ? ["breakfast", "dinner"] : [add.meal_type];
+      for (const m of meals) {
+        await client.post("/admin/bookings", { ...add, meal_type: m });
+      }
+      toast.success(add.meal_type === "both"
+        ? "Both meals booked (admin override) · employee notified"
+        : "Admin override booking saved · employee notified");
       setAddOpen(false);
       setAdd({ user_id: "", meal_type: "breakfast", meal_date: date, quantity: 1, booking_type: "dine_in", reason: "" });
+      setEmpQuery("");
       await load();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setAddBusy(false); }
@@ -112,7 +120,15 @@ export default function AdminBookingsTab({ employees }) {
     finally { setDayBusy(false); }
   };
 
-  const filteredEmployees = useMemo(() => (employees || []).filter((u) => u.role !== "admin"), [employees]);
+  const filteredEmployees = useMemo(() => {
+    const list = (employees || []).filter((u) => u.role !== "admin");
+    if (!empQuery.trim()) return list.slice(0, 50);
+    const q = empQuery.toLowerCase();
+    return list.filter((u) =>
+      u.employee_number.toLowerCase().includes(q) ||
+      (u.name || "").toLowerCase().includes(q)
+    ).slice(0, 50);
+  }, [employees, empQuery]);
 
   return (
     <Card className="border-border">
@@ -200,8 +216,13 @@ export default function AdminBookingsTab({ employees }) {
                 <form onSubmit={forceBook} className="space-y-4">
                   <div className="space-y-2">
                     <Label className="overline">Employee</Label>
+                    <Input value={empQuery} onChange={(e) => setEmpQuery(e.target.value)}
+                      placeholder="Search by name or number…"
+                      className="h-10 mb-2" data-testid="force-book-emp-search" />
                     <Select value={add.user_id} onValueChange={(v) => setAdd({ ...add, user_id: v })}>
-                      <SelectTrigger className="h-11" data-testid="force-book-employee"><SelectValue placeholder="Choose employee…" /></SelectTrigger>
+                      <SelectTrigger className="h-11" data-testid="force-book-employee">
+                        <SelectValue placeholder={filteredEmployees.length === 0 ? "No match" : "Choose employee…"} />
+                      </SelectTrigger>
                       <SelectContent className="max-h-[280px]">
                         {filteredEmployees.map((u) => (
                           <SelectItem key={u.id} value={u.id}>
@@ -219,6 +240,7 @@ export default function AdminBookingsTab({ employees }) {
                         <SelectContent>
                           <SelectItem value="breakfast">Breakfast</SelectItem>
                           <SelectItem value="dinner">Dinner</SelectItem>
+                          <SelectItem value="both">Both meals</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
