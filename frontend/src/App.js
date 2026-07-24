@@ -9,6 +9,7 @@ import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import EmployeeDashboard from "@/pages/EmployeeDashboard";
 import AdminDashboard from "@/pages/AdminDashboard";
 import ChefDashboard from "@/pages/ChefDashboard";
+import RequireEmailGate from "@/components/RequireEmailGate";
 import { Toaster } from "@/components/ui/sonner";
 
 function Protected({ children, roles }) {
@@ -55,6 +56,7 @@ export default function App() {
               <Route path="/chef" element={<Protected roles={["chef", "admin"]}><ChefDashboard /></Protected>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
+            <RequireEmailGate />
           </BrowserRouter>
           <Toaster position="top-right" richColors />
         </AuthProvider>

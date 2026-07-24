@@ -16,7 +16,15 @@ export function formatApiError(err) {
   if (detail == null) return err?.message || "Something went wrong";
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail))
-    return detail.map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e))).join(" ");
+    return detail
+      .map((e) => {
+        if (!e) return "";
+        const field = Array.isArray(e.loc) ? e.loc.filter((p) => p !== "body").join(".") : "";
+        const msg = typeof e.msg === "string" ? e.msg : JSON.stringify(e);
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .filter(Boolean)
+      .join(" · ");
   if (detail && typeof detail.msg === "string") return detail.msg;
   return String(detail);
 }

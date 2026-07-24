@@ -164,7 +164,7 @@ class RegisterIn(BaseModel):
     employee_number: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=4, max_length=128)
-    email: Optional[EmailStr] = None
+    email: EmailStr
 
 
 class LoginIn(BaseModel):
@@ -176,7 +176,7 @@ class AdminCreateEmployeeIn(BaseModel):
     employee_number: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=4, max_length=128)
-    email: Optional[EmailStr] = None
+    email: EmailStr
     role: Literal["employee", "admin", "chef"] = "employee"
 
 
@@ -280,7 +280,7 @@ async def register(body: RegisterIn):
     doc = {
         "employee_number": emp,
         "name": body.name.strip(),
-        "email": body.email.lower() if body.email else None,
+        "email": body.email.lower(),
         "password_hash": hash_password(body.password),
         "role": "employee",
         "created_at": now_local().isoformat(),
@@ -713,7 +713,7 @@ async def admin_create_employee(body: AdminCreateEmployeeIn, admin: dict = Depen
     doc = {
         "employee_number": emp,
         "name": body.name.strip(),
-        "email": body.email.lower() if body.email else None,
+        "email": body.email.lower(),
         "password_hash": hash_password(body.password),
         "role": body.role,
         "created_at": now_local().isoformat(),
@@ -1124,7 +1124,7 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
         raise HTTPException(status_code=400, detail="CSV is empty or missing a header row")
     # Normalise header names to lowercase for lookup
     field_map = {name.strip().lower(): name for name in reader.fieldnames}
-    required = ["employee_number", "name"]
+    required = ["employee_number", "name", "email"]
     for req in required:
         if req not in field_map:
             raise HTTPException(status_code=400, detail=f"CSV missing required column: {req}")
@@ -1135,8 +1135,12 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
     for idx, row in enumerate(reader, start=2):  # start=2 to reflect the actual line in the file
         emp = (row.get(field_map["employee_number"]) or "").strip()
         name = (row.get(field_map.get("name", "")) or "").strip()
-        if not emp or not name:
-            errors.append({"line": idx, "error": "employee_number and name are required"})
+        email = (row.get(field_map["email"]) or "").strip().lower()
+        if not emp or not name or not email:
+            errors.append({"line": idx, "error": "employee_number, name, and email are required"})
+            continue
+        if "@" not in email or "." not in email.split("@")[-1]:
+            errors.append({"line": idx, "error": f"invalid email '{email}'"})
             continue
 
         role = "employee"
@@ -1147,11 +1151,6 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
             elif r:
                 errors.append({"line": idx, "error": f"invalid role '{r}'"})
                 continue
-
-        email = None
-        if "email" in field_map:
-            e = (row.get(field_map["email"]) or "").strip().lower()
-            email = e or None
 
         password = emp  # default password = their employee number
         if "password" in field_map:

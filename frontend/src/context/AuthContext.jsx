@@ -34,7 +34,7 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const register = async (employee_number, name, password, email = null) => {
+  const register = async (employee_number, name, password, email) => {
     try {
       const { data } = await client.post("/auth/register", { employee_number, name, password, email });
       localStorage.setItem("mess_token", data.token);
@@ -45,13 +45,15 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const updateUser = (patch) => setUser((u) => (u ? { ...u, ...patch } : u));
+
   const logout = () => {
     localStorage.removeItem("mess_token");
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, ready, login, register, logout }}>
+    <AuthContext.Provider value={{ user, ready, login, register, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

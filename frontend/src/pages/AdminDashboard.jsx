@@ -149,7 +149,7 @@ export default function AdminDashboard() {
   };
 
   const downloadCsvTemplate = () => {
-    const csv = "employee_number,name,email,role,password\n100001,Priya Sharma,priya@company.com,employee,\n100002,Ravi Kumar,,chef,ravi1234\n";
+    const csv = "employee_number,name,email,role,password\n100001,Priya Sharma,priya@company.com,employee,\n100002,Ravi Kumar,ravi@company.com,chef,ravi1234\n";
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -195,8 +195,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setCreating(true);
     try {
-      const payload = { ...newEmp, email: newEmp.email.trim() || null };
-      await client.post("/admin/employees", payload);
+      await client.post("/admin/employees", newEmp);
       toast.success(`Employee ${newEmp.employee_number} added`);
       setCreateOpen(false);
       setNewEmp({ employee_number: "", name: "", email: "", password: "", role: "employee" });
@@ -530,7 +529,7 @@ export default function AdminDashboard() {
                           <DialogTitle>Bulk import employees</DialogTitle>
                           <DialogDescription>
                             Upload a CSV with columns: <span className="font-mono-plex text-xs">employee_number, name, email, role, password</span>.
-                            Only <b>employee_number</b> and <b>name</b> are required. If <span className="font-mono-plex">password</span> is blank we use the employee number as the default password.
+                            <b>employee_number, name, and email are required.</b> If <span className="font-mono-plex">password</span> is blank we use the employee number as the default password. Role defaults to <span className="font-mono-plex">employee</span>.
                           </DialogDescription>
                         </DialogHeader>
                         <form onSubmit={submitBulk} className="space-y-4">
@@ -608,8 +607,8 @@ export default function AdminDashboard() {
                           <Input value={newEmp.name} onChange={(e) => setNewEmp({ ...newEmp, name: e.target.value })} required data-testid="new-emp-name-input" />
                         </div>
                         <div className="space-y-2">
-                          <Label className="overline">Email (optional)</Label>
-                          <Input type="email" value={newEmp.email} onChange={(e) => setNewEmp({ ...newEmp, email: e.target.value })} data-testid="new-emp-email-input" />
+                          <Label className="overline">Email</Label>
+                          <Input type="email" value={newEmp.email} onChange={(e) => setNewEmp({ ...newEmp, email: e.target.value })} required data-testid="new-emp-email-input" />
                         </div>
                         <div className="space-y-2">
                           <Label className="overline">Temporary password</Label>

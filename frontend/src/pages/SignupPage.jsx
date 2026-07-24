@@ -23,7 +23,7 @@ export default function SignupPage() {
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const res = await register(empNum.trim(), name.trim(), password, email.trim() || null);
+    const res = await register(empNum.trim(), name.trim(), password, email.trim());
     setBusy(false);
     if (res.ok) {
       toast.success("Account created — welcome!");
@@ -82,9 +82,9 @@ export default function SignupPage() {
                       onChange={(e) => setName(e.target.value)} placeholder="Priya Sharma" className="h-12" required />
                   </div>
                   <div className="space-y-2">
-                    <Label className="overline">Email <span className="opacity-60 normal-case tracking-normal text-[10px]">(optional, for password recovery)</span></Label>
+                    <Label className="overline">Email</Label>
                     <Input type="email" data-testid="signup-email-input" value={email}
-                      onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" className="h-12" />
+                      onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" className="h-12" required />
                   </div>
                   <div className="space-y-2">
                     <Label className="overline">Password</Label>
