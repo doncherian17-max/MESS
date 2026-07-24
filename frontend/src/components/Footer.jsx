@@ -1,15 +1,15 @@
-import { Heart } from "lucide-react";
-
 export default function Footer() {
   return (
     <footer
       className="border-t border-border bg-card/60 backdrop-blur mt-auto"
       data-testid="app-footer"
     >
-      <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-        <span className="overline tracking-wider">Made with</span>
-        <Heart className="h-3 w-3 text-primary fill-primary" />
-        <span className="overline tracking-wider">by</span>
+      <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 text-center text-xs text-muted-foreground">
+        <span className="font-display font-semibold text-foreground">Baratie</span>
+        <span className="mx-1.5">©</span>
+        <span>2026</span>
+        <span className="mx-2 text-border">|</span>
+        <span>Designed &amp; Developed by </span>
         <span
           className="font-display font-semibold text-foreground"
           data-testid="footer-credits"
