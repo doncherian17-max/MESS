@@ -84,7 +84,7 @@ export default function ChefDashboard() {
     finally { if (!silent) setLoading(false); }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, mealFilter]);
+  useEffect(() => { load(); }, [date, mealFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-refresh every 10 seconds when viewing today and the toggle is on
   useEffect(() => {

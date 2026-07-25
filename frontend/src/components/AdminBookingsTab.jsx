@@ -61,7 +61,7 @@ export default function AdminBookingsTab({ employees }) {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, mealFilter]);
+  useEffect(() => { load(); }, [date, mealFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const forceBook = async (e) => {
     e.preventDefault();

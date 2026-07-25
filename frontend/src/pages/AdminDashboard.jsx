@@ -184,7 +184,7 @@ export default function AdminDashboard() {
     URL.revokeObjectURL(a.href);
   };
 
-  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll KPIs every 15s for near-real-time meal counts
   useEffect(() => {

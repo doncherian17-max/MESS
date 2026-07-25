@@ -208,7 +208,7 @@ export default function EmployeeDashboard() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const book = async (item, extra) => {
     setBusyKey(item.meal_type);

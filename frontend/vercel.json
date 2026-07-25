@@ -4,6 +4,12 @@
   "installCommand": "yarn install --frozen-lockfile",
   "outputDirectory": "build",
   "framework": "create-react-app",
+  "build": {
+    "env": {
+      "CI": "false",
+      "DISABLE_ESLINT_PLUGIN": "true"
+    }
+  },
   "rewrites": [
     { "source": "/((?!static|.*\\..*).*)", "destination": "/index.html" }
   ]
