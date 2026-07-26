@@ -700,6 +700,11 @@ async def my_bookings(
     }
 
 
+@api.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # ---------------- Menu (read for all authed users) ----------------
 def _weekday_key(date_str: str) -> str:
     d = parse_iso_date(date_str)
