@@ -1290,6 +1290,99 @@ async def admin_export_excel(
     )
 
 
+@api.get("/admin/payroll-export")
+async def admin_payroll_export(
+    month: Optional[str] = Query(None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Export a ready-to-file payroll ledger for the given month (YYYY-MM).
+    Combines each employee's breakfast/dinner counts with current meal prices
+    and their ₹ total, ready to hand to finance."""
+    if not month:
+        n = now_local()
+        month = f"{n.year:04d}-{n.month:02d}"
+    try:
+        parse_iso_date(f"{month}-01")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid month, use YYYY-MM")
+
+    prices = await get_meal_prices()
+    pipeline = [
+        {"$match": {"meal_date": {"$regex": f"^{month}-"},
+                    "status": {"$ne": "emergency_cancelled"}}},
+        {"$group": {"_id": {"user_id": "$user_id", "meal_type": "$meal_type"},
+                    "qty": {"$sum": "$quantity"}}},
+    ]
+    counts: dict = {}
+    async for row in db.bookings.aggregate(pipeline):
+        uid = row["_id"]["user_id"]
+        counts.setdefault(uid, {"breakfast": 0, "dinner": 0})
+        counts[uid][row["_id"]["meal_type"]] = row["qty"]
+
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Payroll {month}"
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="e11d48", end_color="e11d48", fill_type="solid")
+    headers = ["Employee ID", "Name", "Role", "Breakfast Meals",
+               "Dinner Meals", f"Breakfast ₹ (@ {prices['breakfast']})",
+               f"Dinner ₹ (@ {prices['dinner']})", "Total ₹"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 24
+
+    r = 2
+    grand_b = grand_d = 0
+    grand_b_amt = grand_d_amt = 0.0
+    async for u in db.users.find({}).sort("employee_number", 1):
+        if u.get("role") == "admin":
+            continue  # payroll is for employees & chefs (people who eat)
+        uid = str(u["_id"])
+        c = counts.get(uid, {"breakfast": 0, "dinner": 0})
+        b_amt = round(c["breakfast"] * prices["breakfast"], 2)
+        d_amt = round(c["dinner"] * prices["dinner"], 2)
+        total = round(b_amt + d_amt, 2)
+        ws.cell(row=r, column=1, value=u.get("employee_number", ""))
+        ws.cell(row=r, column=2, value=u.get("name", ""))
+        ws.cell(row=r, column=3, value=u.get("role", "employee").capitalize())
+        ws.cell(row=r, column=4, value=c["breakfast"])
+        ws.cell(row=r, column=5, value=c["dinner"])
+        ws.cell(row=r, column=6, value=b_amt)
+        ws.cell(row=r, column=7, value=d_amt)
+        ws.cell(row=r, column=8, value=total).font = Font(bold=True)
+        grand_b += c["breakfast"]; grand_d += c["dinner"]
+        grand_b_amt += b_amt; grand_d_amt += d_amt
+        r += 1
+
+    # Grand totals row
+    totals_row = r
+    ws.cell(row=totals_row, column=1, value="TOTAL").font = Font(bold=True)
+    ws.cell(row=totals_row, column=4, value=grand_b).font = Font(bold=True)
+    ws.cell(row=totals_row, column=5, value=grand_d).font = Font(bold=True)
+    ws.cell(row=totals_row, column=6, value=round(grand_b_amt, 2)).font = Font(bold=True)
+    ws.cell(row=totals_row, column=7, value=round(grand_d_amt, 2)).font = Font(bold=True)
+    ws.cell(row=totals_row, column=8, value=round(grand_b_amt + grand_d_amt, 2)).font = Font(bold=True)
+    for col_letter, w in [("A", 14), ("B", 28), ("C", 12), ("D", 16),
+                          ("E", 16), ("F", 18), ("G", 18), ("H", 14)]:
+        ws.column_dimensions[col_letter].width = w
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"payroll_ledger_{month}.xlsx"
+    await audit(admin, "payroll.export", target=month)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @api.get("/reports/download/{token}")
 async def download_emailed_report(token: str):
     rec = await db.report_downloads.find_one({"token": token})

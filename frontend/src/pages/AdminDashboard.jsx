@@ -275,6 +275,29 @@ export default function AdminDashboard() {
     finally { setExportBusy(false); }
   };
 
+  const [payrollMonth, setPayrollMonth] = useState(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [payrollBusy, setPayrollBusy] = useState(false);
+  const doPayrollExport = async () => {
+    setPayrollBusy(true);
+    try {
+      const token = localStorage.getItem("mess_token");
+      const url = `${API}/admin/payroll-export?month=${payrollMonth}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || "Payroll export failed"); }
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      const dl = URL.createObjectURL(blob);
+      a.href = dl; a.download = `payroll_ledger_${payrollMonth}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(dl);
+      toast.success("Payroll ledger downloaded");
+    } catch (err) { toast.error(err.message || "Payroll export failed"); }
+    finally { setPayrollBusy(false); }
+  };
+
   const emailReport = async () => {
     toast.error("Email report is disabled. Please use the Download Excel option instead.");
   };
@@ -547,7 +570,31 @@ export default function AdminDashboard() {
                   </Button>
                 </div>
 
-                <div className="mb-6 rounded-xl border border-border p-4 bg-accent/40">
+                <div className="mb-6 rounded-xl border-2 p-4" style={{ borderColor: "#e11d48", backgroundColor: "#fef2f2" }}>
+                  <div className="flex items-end gap-3 flex-wrap">
+                    <div className="space-y-2">
+                      <Label className="overline flex items-center gap-1.5" style={{ color: "#e11d48" }}>
+                        <Download className="h-3 w-3" /> Payroll ledger (₹)
+                      </Label>
+                      <p className="text-xs text-muted-foreground max-w-md">
+                        One-click monthly payroll export: each employee&apos;s meals × current price = total ₹, ready for finance.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="overline">Month</Label>
+                      <Input type="month" value={payrollMonth} onChange={(e) => setPayrollMonth(e.target.value)}
+                        className="h-11 w-[180px]" data-testid="payroll-month-input" />
+                    </div>
+                    <Button onClick={doPayrollExport} disabled={payrollBusy}
+                      data-testid="payroll-export-button"
+                      className="h-11 rounded-full gap-2 ml-auto text-white"
+                      style={{ backgroundColor: "#e11d48" }}>
+                      {payrollBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : (<><Download className="h-4 w-4" /> Download payroll</>)}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mb-6 rounded-xl border border-border p-4 bg-accent/40" style={{ display: "none" }}>
                   <div className="flex items-end gap-3 flex-wrap">
                     <div className="space-y-2">
                       <Label className="overline flex items-center gap-1.5"><Mail className="h-3 w-3" /> Email this report</Label>
