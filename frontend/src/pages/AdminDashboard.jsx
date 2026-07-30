@@ -62,7 +62,7 @@ export default function AdminDashboard() {
 
   // Holidays
   const [holidays, setHolidays] = useState([]);
-  const [newHoliday, setNewHoliday] = useState({ date: "", name: "", applies_to: "both" });
+  const [newHoliday, setNewHoliday] = useState({ date: "", end_date: "", name: "", applies_to: "both" });
   const [holidayBusy, setHolidayBusy] = useState(false);
 
   // Menu
@@ -90,6 +90,19 @@ export default function AdminDashboard() {
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Meal prices (₹)
+  const [prices, setPrices] = useState({ breakfast: 0, dinner: 0 });
+  const [priceDraft, setPriceDraft] = useState({ breakfast: "", dinner: "" });
+  const [pricesBusy, setPricesBusy] = useState(false);
+
+  // Monthly deductions
+  const [deductions, setDeductions] = useState(null);
+  const [deductionsLoading, setDeductionsLoading] = useState(false);
+
+  // Delete bookings by date range
+  const [delRange, setDelRange] = useState({ from_date: todayISO(), to_date: todayISO(), meal_type: "" });
+  const [delRangeBusy, setDelRangeBusy] = useState(false);
 
   // Edit employee (email/name/password)
   const [editUser, setEditUser] = useState(null);
@@ -168,14 +181,20 @@ export default function AdminDashboard() {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setBulkResult(data);
-      toast.success(`Imported ${data.created} employees`);
+      toast.success(`${data.created} added · ${data.updated || 0} updated`);
       await loadTop();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setBulkBusy(false); }
   };
 
   const downloadCsvTemplate = () => {
-    const csv = "employee_number,name,email,role,password\n100001,Priya Sharma,priya@company.com,employee,\n100002,Ravi Kumar,ravi@company.com,chef,ravi1234\n";
+    // Generate a minimal Excel-style CSV so users can save as .xlsx and re-upload
+    const rows = [
+      ["Employee ID", "Name", "Password"],
+      ["EMP001", "Priya Sharma", "welcome123"],
+      ["EMP002", "Ravi Kumar", "welcome123"],
+    ];
+    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -184,7 +203,50 @@ export default function AdminDashboard() {
     URL.revokeObjectURL(a.href);
   };
 
-  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); loadPrices(); loadDeductions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadPrices = async () => {
+    try {
+      const { data } = await client.get("/settings/prices");
+      setPrices(data);
+      setPriceDraft({ breakfast: String(data.breakfast), dinner: String(data.dinner) });
+    } catch (err) { /* silent */ }
+  };
+  const savePrices = async (e) => {
+    e.preventDefault();
+    const b = parseFloat(priceDraft.breakfast);
+    const d = parseFloat(priceDraft.dinner);
+    if (Number.isNaN(b) || Number.isNaN(d) || b < 0 || d < 0) { toast.error("Enter valid non-negative amounts"); return; }
+    setPricesBusy(true);
+    try {
+      await client.put("/admin/settings/prices", { breakfast: b, dinner: d });
+      toast.success("Meal prices updated");
+      await loadPrices();
+      await loadDeductions();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setPricesBusy(false); }
+  };
+  const loadDeductions = async () => {
+    setDeductionsLoading(true);
+    try {
+      const { data } = await client.get("/admin/deductions");
+      setDeductions(data);
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setDeductionsLoading(false); }
+  };
+  const deleteBookingsRange = async () => {
+    if (!delRange.from_date || !delRange.to_date) { toast.error("Pick both dates"); return; }
+    if (!window.confirm(`Delete ALL ${delRange.meal_type || "meal"} bookings from ${delRange.from_date} to ${delRange.to_date}? Employee accounts stay intact. This cannot be undone.`)) return;
+    setDelRangeBusy(true);
+    try {
+      const body = { from_date: delRange.from_date, to_date: delRange.to_date };
+      if (delRange.meal_type) body.meal_type = delRange.meal_type;
+      const { data } = await client.post("/admin/bookings/range-delete", body);
+      toast.success(`Deleted ${data.deleted} booking(s)`);
+      await loadTop(); await loadDeductions();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setDelRangeBusy(false); }
+  };
 
   // Poll KPIs every 15s for near-real-time meal counts
   useEffect(() => {
@@ -214,13 +276,7 @@ export default function AdminDashboard() {
   };
 
   const emailReport = async () => {
-    if (!reportEmail) { toast.error("Enter an email"); return; }
-    setEmailBusy(true);
-    try {
-      await client.post("/admin/email-report", { email: reportEmail, from_date: fromDate, to_date: toDate });
-      toast.success(`Report queued for ${reportEmail}`);
-    } catch (err) { toast.error(formatApiError(err)); }
-    finally { setEmailBusy(false); }
+    toast.error("Email report is disabled. Please use the Download Excel option instead.");
   };
 
   // Employees
@@ -303,9 +359,14 @@ export default function AdminDashboard() {
     e.preventDefault();
     setHolidayBusy(true);
     try {
-      await client.post("/admin/holidays", newHoliday);
+      await client.post("/admin/holidays", {
+        date: newHoliday.date,
+        end_date: newHoliday.end_date || newHoliday.date,
+        name: newHoliday.name,
+        applies_to: newHoliday.applies_to,
+      });
       toast.success("Holiday added");
-      setNewHoliday({ date: "", name: "", applies_to: "both" });
+      setNewHoliday({ date: "", end_date: "", name: "", applies_to: "both" });
       await loadHolidays();
     } catch (err) { toast.error(formatApiError(err)); }
     finally { setHolidayBusy(false); }
@@ -377,11 +438,52 @@ export default function AdminDashboard() {
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-10 lg:py-14" data-testid="admin-dashboard">
         <div className="mb-10">
           <p className="overline text-muted-foreground mb-3 flex items-center gap-1.5"><ShieldCheck className="h-3 w-3" /> Admin Console</p>
-          <h1 className="font-display text-4xl lg:text-5xl font-extrabold tracking-tight">Kitchen operations</h1>
+          <h1 className="font-display text-4xl lg:text-5xl font-extrabold tracking-tight" style={{ color: "#e11d48" }}>SUPER MILLER</h1>
           <p className="text-muted-foreground mt-3 leading-relaxed max-w-xl">
-            Manage employees, plan menus, mark holidays, and export attendance for any date range.
+            Manage employees, plan menus, set meal prices, mark holidays, and export attendance for any date range.
           </p>
         </div>
+
+        {/* Meal prices card */}
+        <Card className="border-border mb-8" data-testid="meal-prices-card">
+          <CardContent className="p-6 lg:p-8">
+            <div className="flex items-baseline justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <p className="overline text-muted-foreground mb-1">Meal prices (₹)</p>
+                <h3 className="font-display text-2xl font-bold">Current rates</h3>
+                <p className="text-xs text-muted-foreground mt-1">These prices are applied when computing each employee&apos;s monthly meal deduction.</p>
+              </div>
+              <div className="flex items-baseline gap-6">
+                <div>
+                  <div className="overline text-muted-foreground">Breakfast</div>
+                  <div className="font-display font-extrabold text-3xl" data-testid="price-breakfast-current">₹{prices.breakfast}</div>
+                </div>
+                <div>
+                  <div className="overline text-muted-foreground">Dinner</div>
+                  <div className="font-display font-extrabold text-3xl" data-testid="price-dinner-current">₹{prices.dinner}</div>
+                </div>
+              </div>
+            </div>
+            <form onSubmit={savePrices} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <div className="space-y-2">
+                <Label className="overline">Breakfast (₹)</Label>
+                <Input type="number" min="0" step="0.01" value={priceDraft.breakfast}
+                  onChange={(e) => setPriceDraft({ ...priceDraft, breakfast: e.target.value })}
+                  className="h-11" data-testid="price-breakfast-input" required />
+              </div>
+              <div className="space-y-2">
+                <Label className="overline">Dinner (₹)</Label>
+                <Input type="number" min="0" step="0.01" value={priceDraft.dinner}
+                  onChange={(e) => setPriceDraft({ ...priceDraft, dinner: e.target.value })}
+                  className="h-11" data-testid="price-dinner-input" required />
+              </div>
+              <Button type="submit" disabled={pricesBusy} data-testid="save-prices-button"
+                className="h-11 rounded-full gap-2" style={{ backgroundColor: "#e11d48", color: "white" }}>
+                {pricesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save prices"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
         {/* KPI */}
         {today && (
@@ -670,14 +772,13 @@ export default function AdminDashboard() {
                         <DialogHeader>
                           <DialogTitle>Bulk import employees</DialogTitle>
                           <DialogDescription>
-                            Upload a CSV with columns: <span className="font-mono-plex text-xs">employee_number, name, email, role, password</span>.
-                            <b>employee_number, name, and email are required.</b> If <span className="font-mono-plex">password</span> is blank we use the employee number as the default password. Role defaults to <span className="font-mono-plex">employee</span>.
+                            Upload an Excel (<span className="font-mono-plex text-xs">.xlsx</span>) with columns: <span className="font-mono-plex text-xs">Employee ID, Name, Password</span>. Re-uploading an existing Employee ID updates the name and resets the password.
                           </DialogDescription>
                         </DialogHeader>
                         <form onSubmit={submitBulk} className="space-y-4">
                           <div className="space-y-2">
-                            <Label className="overline">CSV file</Label>
-                            <Input type="file" accept=".csv,text/csv"
+                            <Label className="overline">Excel file</Label>
+                            <Input type="file" accept=".xlsx"
                               onChange={(e) => { setBulkFile(e.target.files?.[0] || null); setBulkResult(null); }}
                               data-testid="bulk-file-input" className="h-11" />
                           </div>
@@ -823,16 +924,23 @@ export default function AdminDashboard() {
                   <h3 className="font-display text-2xl font-bold">Holidays</h3>
                   <p className="text-sm text-muted-foreground mt-1">Mark dates when the mess is closed. Bookings on these dates are blocked.</p>
                 </div>
-                <form onSubmit={addHoliday} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6 items-end">
+                <form onSubmit={addHoliday} className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6 items-end">
                   <div className="space-y-2">
-                    <Label className="overline">Date</Label>
+                    <Label className="overline">From date</Label>
                     <Input type="date" value={newHoliday.date} onChange={(e) => setNewHoliday({ ...newHoliday, date: e.target.value })}
                       required className="h-11" data-testid="new-holiday-date" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="overline">To date</Label>
+                    <Input type="date" value={newHoliday.end_date} onChange={(e) => setNewHoliday({ ...newHoliday, end_date: e.target.value })}
+                      min={newHoliday.date || undefined}
+                      className="h-11" data-testid="new-holiday-end-date"
+                      placeholder="(same as From)" />
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label className="overline">Occasion / Name</Label>
                     <Input value={newHoliday.name} onChange={(e) => setNewHoliday({ ...newHoliday, name: e.target.value })}
-                      placeholder="e.g., Diwali, Independence Day" required className="h-11" data-testid="new-holiday-name" />
+                      placeholder="e.g., Diwali, Vacation" required className="h-11" data-testid="new-holiday-name" />
                   </div>
                   <div className="space-y-2">
                     <Label className="overline">Applies to</Label>
@@ -845,7 +953,7 @@ export default function AdminDashboard() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button type="submit" disabled={holidayBusy} data-testid="add-holiday-button" className="rounded-full h-11 gap-2 md:col-span-4 md:justify-self-start">
+                  <Button type="submit" disabled={holidayBusy} data-testid="add-holiday-button" className="rounded-full h-11 gap-2 md:col-span-5 md:justify-self-start">
                     {holidayBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Add holiday</>}
                   </Button>
                 </form>
@@ -854,7 +962,8 @@ export default function AdminDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/40">
-                        <TableHead className="py-4">Date</TableHead>
+                        <TableHead className="py-4">From</TableHead>
+                        <TableHead>To</TableHead>
                         <TableHead>Occasion</TableHead>
                         <TableHead>Applies to</TableHead>
                         <TableHead className="text-right">Action</TableHead>
@@ -862,10 +971,11 @@ export default function AdminDashboard() {
                     </TableHeader>
                     <TableBody>
                       {holidays.length === 0 ? (
-                        <TableRow><TableCell colSpan={4} className="text-center py-10 text-muted-foreground" data-testid="holidays-empty">No holidays yet.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground" data-testid="holidays-empty">No holidays yet.</TableCell></TableRow>
                       ) : holidays.map((h) => (
                         <TableRow key={h.id} data-testid={`holiday-row-${h.id}`}>
                           <TableCell className="py-4 font-mono-plex">{h.date}</TableCell>
+                          <TableCell className="font-mono-plex">{h.end_date || h.date}</TableCell>
                           <TableCell>{h.name}</TableCell>
                           <TableCell><Badge variant="outline" className="rounded-full">{h.applies_to === "both" ? "Both" : h.applies_to}</Badge></TableCell>
                           <TableCell className="text-right">

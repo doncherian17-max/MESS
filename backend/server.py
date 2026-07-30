@@ -38,8 +38,8 @@ APP_URL = os.environ.get("APP_URL", "").rstrip("/")
 
 BREAKFAST_CUTOFF_HOUR = 23
 BREAKFAST_CUTOFF_MIN = 30
-DINNER_CUTOFF_HOUR = 14
-DINNER_CUTOFF_MIN = 30
+DINNER_CUTOFF_HOUR = 15
+DINNER_CUTOFF_MIN = 0
 
 # Breakfast booking window opens at 10:00 on the day before the meal
 BREAKFAST_OPEN_HOUR = 10
@@ -161,70 +161,16 @@ async def record_cancellation(booking: dict, cancelled_by: str, actor_role: str,
 
 
 async def send_apology_email(user_doc: dict, meal_date: str, meals: list, reason: str, background: BackgroundTasks):
-    """Send a 'Sorry, your meal was cancelled' email to a single employee (async)."""
-    email = user_doc.get("email")
-    if not email:
-        return False
-    meals_html = "".join(
-        f"<li><b>{m['type'].capitalize()}</b> — {m['booking_type'].replace('_',' ').title()} × {m['qty']}</li>"
-        for m in meals
-    )
-    subject_meal = "meal" if len(meals) == 1 else "meals"
-    html = f"""
-    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
-      <tr><td align="center">
-        <table width="520" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
-          <tr><td>
-            <h2 style="margin:0 0 8px;color:#2b1e15;">Sorry — your {subject_meal} on {meal_date} was cancelled</h2>
-            <p style="color:#5a4a3d;margin:0 0 12px;line-height:1.6;">
-              Hi {user_doc.get('name') or 'there'}, we're sorry to let you know that the mess had to cancel the following on <b>{meal_date}</b>:
-            </p>
-            <ul style="color:#2b1e15;line-height:1.8;margin:0 0 16px;">{meals_html}</ul>
-            <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;">
-              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
-              <div style="line-height:1.5;">{reason or 'No additional reason provided.'}</div>
-            </div>
-            <p style="color:#8a7969;font-size:12px;margin-top:20px;">
-              Your monthly count has been adjusted automatically. Please book again if the mess reopens.
-            </p>
-            <p style="color:#5a4a3d;margin-top:20px;">— MessBook Team</p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-    """
-    background.add_task(send_email_async, email,
-                        f"Sorry: your {subject_meal} on {meal_date} was cancelled", html)
-    return True
+    """Email dispatch disabled — retained as a no-op for backwards compatibility."""
+    return False
 
 
 async def send_email_async(to: str, subject: str, html: str) -> bool:
-    if not EMAIL_KEY:
-        logger.warning("EMERGENT_EMAIL_KEY missing — skipping email send")
-        return False
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
-                json=payload,
-            )
-        r.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(f"Email send failed: {e}")
-        return False
+    """Email dispatch disabled — retained as a no-op for backwards compatibility."""
+    return False
 
 
 # ---------------- Models ----------------
-class RegisterIn(BaseModel):
-    employee_number: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=100)
-    password: str = Field(min_length=4, max_length=128)
-    email: EmailStr
-
-
 class LoginIn(BaseModel):
     employee_number: str
     password: str
@@ -234,7 +180,6 @@ class AdminCreateEmployeeIn(BaseModel):
     employee_number: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=4, max_length=128)
-    email: EmailStr
     role: Literal["employee", "admin", "chef"] = "employee"
 
 
@@ -251,7 +196,6 @@ class BookingUpdateIn(BaseModel):
 
 
 class UpdateMeIn(BaseModel):
-    email: Optional[EmailStr] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
 
 
@@ -260,19 +204,22 @@ class ChangePasswordIn(BaseModel):
     new_password: str = Field(min_length=4, max_length=128)
 
 
-class ForgotPasswordIn(BaseModel):
-    employee_number: str
-
-
-class ResetPasswordIn(BaseModel):
-    token: str
-    new_password: str = Field(min_length=4, max_length=128)
-
-
 class HolidayIn(BaseModel):
     date: str
+    end_date: Optional[str] = None  # inclusive range end; if None, single day
     name: str = Field(min_length=1, max_length=100)
     applies_to: Literal["breakfast", "dinner", "both"] = "both"
+
+
+class MealPricesIn(BaseModel):
+    breakfast: float = Field(ge=0)
+    dinner: float = Field(ge=0)
+
+
+class DeleteBookingsRangeIn(BaseModel):
+    from_date: str
+    to_date: str
+    meal_type: Optional[Literal["breakfast", "dinner"]] = None
 
 
 class MenuIn(BaseModel):
@@ -290,13 +237,6 @@ class WeeklyMenuIn(BaseModel):
     items: List[str] = Field(default_factory=list)
 
 
-class EmailReportIn(BaseModel):
-    email: EmailStr
-    from_date: str
-    to_date: str
-
-
-# ---------------- Auth ----------------
 async def get_current_user(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
@@ -338,27 +278,6 @@ async def get_chef_or_admin(user: dict = Depends(get_current_user)) -> dict:
 
 
 # ---------------- Auth endpoints ----------------
-@api.post("/auth/register")
-async def register(body: RegisterIn):
-    emp = body.employee_number.strip()
-    existing = await db.users.find_one({"employee_number": emp})
-    if existing:
-        raise HTTPException(status_code=400, detail="Employee number already registered")
-    doc = {
-        "employee_number": emp,
-        "name": body.name.strip(),
-        "email": body.email.lower(),
-        "password_hash": hash_password(body.password),
-        "role": "employee",
-        "created_at": now_local().isoformat(),
-    }
-    res = await db.users.insert_one(doc)
-    doc["_id"] = res.inserted_id
-    token = create_token(str(res.inserted_id), emp, "employee")
-    await audit(doc, "user.register", target=emp)
-    return {"token": token, "user": user_public(doc)}
-
-
 @api.post("/auth/login")
 async def login(body: LoginIn):
     emp = body.employee_number.strip()
@@ -377,14 +296,11 @@ async def me(user: dict = Depends(get_current_user)):
 @api.patch("/auth/me")
 async def update_me(body: UpdateMeIn, user: dict = Depends(get_current_user)):
     updates = {}
-    if body.email is not None:
-        updates["email"] = body.email.lower()
     if body.name is not None:
         updates["name"] = body.name.strip()
     if updates:
         await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
         user.update(updates)
-        # Also propagate name to booking snapshots (for future exports we already store snapshot, but no need to backfill)
     return user_public(user)
 
 
@@ -397,62 +313,37 @@ async def change_password(body: ChangePasswordIn, user: dict = Depends(get_curre
     return {"ok": True}
 
 
-@api.post("/auth/forgot-password")
-async def forgot_password(body: ForgotPasswordIn, background: BackgroundTasks):
-    emp = body.employee_number.strip()
-    user = await db.users.find_one({"employee_number": emp})
-    # Generic response — do not leak whether the user exists
-    if user and user.get("email"):
-        token = secrets.token_urlsafe(32)
-        await db.password_reset_tokens.insert_one({
-            "user_id": str(user["_id"]),
-            "token": token,
-            "expires_at": now_local() + timedelta(hours=1),
-            "used": False,
-        })
-        base = APP_URL or ""
-        reset_link = f"{base}/reset-password?token={token}"
-        html = f"""
-        <table width="100%" cellpadding="0" cellspacing="0" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #faf7f2; padding: 32px 0;">
-          <tr><td align="center">
-            <table width="480" cellpadding="0" cellspacing="0" style="background: white; border: 1px solid #e7ddd0; border-radius: 12px; padding: 32px;">
-              <tr><td>
-                <h2 style="margin: 0 0 12px; color: #2b1e15;">Reset your MessBook password</h2>
-                <p style="color: #5a4a3d; line-height: 1.6;">Hi {user.get('name', 'there')}, we received a request to reset the password for employee <b>{emp}</b>. Click the button below to set a new password. The link expires in 1 hour.</p>
-                <p style="margin: 28px 0;">
-                  <a href="{reset_link}" style="background: #c65a40; color: white; padding: 12px 22px; border-radius: 999px; text-decoration: none; font-weight: 600;">Reset password</a>
-                </p>
-                <p style="color: #8a7969; font-size: 13px;">If the button doesn't work, paste this link in your browser:<br/><span style="word-break: break-all;">{reset_link}</span></p>
-                <p style="color: #8a7969; font-size: 13px; margin-top: 20px;">Didn't request this? You can safely ignore this email.</p>
-              </td></tr>
-            </table>
-          </td></tr>
-        </table>
-        """
-        background.add_task(send_email_async, user["email"], "Reset your MessBook password", html)
-    return {"ok": True, "message": "If an account exists with an email on file, a reset link has been sent."}
+# ---------------- Meal prices (settings) ----------------
+DEFAULT_BREAKFAST_PRICE = 50.0
+DEFAULT_DINNER_PRICE = 80.0
 
 
-@api.post("/auth/reset-password")
-async def reset_password(body: ResetPasswordIn):
-    rec = await db.password_reset_tokens.find_one({"token": body.token, "used": False})
-    if not rec:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
-    expires_at = rec["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        # Motor/PyMongo returns naive UTC datetimes for tz-aware writes
-        expires_at = expires_at.replace(tzinfo=_tz.utc)
-    if now_local() > expires_at:
-        raise HTTPException(status_code=400, detail="Reset link has expired")
-    try:
-        oid = ObjectId(rec["user_id"])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token")
-    await db.users.update_one({"_id": oid}, {"$set": {"password_hash": hash_password(body.new_password)}})
-    await db.password_reset_tokens.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
-    return {"ok": True}
+async def get_meal_prices() -> dict:
+    doc = await db.settings.find_one({"key": "meal_prices"})
+    if doc:
+        return {
+            "breakfast": float(doc.get("breakfast", DEFAULT_BREAKFAST_PRICE)),
+            "dinner": float(doc.get("dinner", DEFAULT_DINNER_PRICE)),
+        }
+    return {"breakfast": DEFAULT_BREAKFAST_PRICE, "dinner": DEFAULT_DINNER_PRICE}
+
+
+@api.get("/settings/prices")
+async def get_prices(user: dict = Depends(get_current_user)):
+    return await get_meal_prices()
+
+
+@api.put("/admin/settings/prices")
+async def set_prices(body: MealPricesIn, admin: dict = Depends(get_admin_user)):
+    await db.settings.update_one(
+        {"key": "meal_prices"},
+        {"$set": {"breakfast": float(body.breakfast), "dinner": float(body.dinner),
+                  "updated_at": now_local().isoformat()}},
+        upsert=True,
+    )
+    await audit(admin, "settings.prices.update",
+                meta={"breakfast": body.breakfast, "dinner": body.dinner})
+    return {"ok": True, "breakfast": float(body.breakfast), "dinner": float(body.dinner)}
 
 
 # ---------------- Bookings ----------------
@@ -472,8 +363,22 @@ async def is_emergency_cancelled(meal_date: str, meal_type: str, user_id: Option
 
 
 async def is_holiday(meal_date: str, meal_type: str) -> Optional[dict]:
-    h = await db.holidays.find_one({"date": meal_date, "applies_to": {"$in": [meal_type, "both"]}})
-    return h
+    """Match single-date holidays OR any range where date <= meal_date <= end_date."""
+    # Single-day match
+    h = await db.holidays.find_one({
+        "date": meal_date,
+        "applies_to": {"$in": [meal_type, "both"]},
+    })
+    if h:
+        return h
+    # Range match: date <= meal_date AND (end_date exists AND end_date >= meal_date)
+    async for cand in db.holidays.find({
+        "date": {"$lte": meal_date},
+        "end_date": {"$gte": meal_date},
+        "applies_to": {"$in": [meal_type, "both"]},
+    }):
+        return cand
+    return None
 
 
 @api.get("/bookings/status")
@@ -663,12 +568,11 @@ async def my_cancellations(
 
 @api.get("/bookings/mine")
 async def my_bookings(
-    month: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
-    if not month:
-        n = now_local()
-        month = f"{n.year:04d}-{n.month:02d}"
+    """Return only the CURRENT MONTH's bookings for the logged-in employee."""
+    n = now_local()
+    month = f"{n.year:04d}-{n.month:02d}"
     cursor = db.bookings.find({
         "user_id": str(user["_id"]),
         "meal_date": {"$regex": f"^{month}-"},
@@ -691,11 +595,17 @@ async def my_bookings(
             "served": b.get("served", False),
             "created_at": b.get("created_at"),
         })
+    # Deduction totals in ₹
+    prices = await get_meal_prices()
+    deduction = round(b_qty * prices["breakfast"] + d_qty * prices["dinner"], 2)
     return {
         "month": month,
         "breakfast_count": b_qty,
         "dinner_count": d_qty,
         "total": b_qty + d_qty,
+        "breakfast_price": prices["breakfast"],
+        "dinner_price": prices["dinner"],
+        "deduction": deduction,
         "items": items,
     }
 
@@ -901,7 +811,7 @@ async def admin_create_employee(body: AdminCreateEmployeeIn, admin: dict = Depen
     doc = {
         "employee_number": emp,
         "name": body.name.strip(),
-        "email": body.email.lower(),
+        "email": None,
         "password_hash": hash_password(body.password),
         "role": body.role,
         "created_at": now_local().isoformat(),
@@ -913,7 +823,6 @@ async def admin_create_employee(body: AdminCreateEmployeeIn, admin: dict = Depen
 
 
 class AdminUpdateEmployeeIn(BaseModel):
-    email: Optional[EmailStr] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     role: Optional[Literal["employee", "admin", "chef"]] = None
     password: Optional[str] = Field(default=None, min_length=4, max_length=128)
@@ -931,9 +840,6 @@ async def admin_update_employee(user_id: str, body: AdminUpdateEmployeeIn, admin
 
     updates: dict = {}
     audit_meta: dict = {}
-    if body.email is not None:
-        updates["email"] = body.email.lower()
-        audit_meta["email"] = updates["email"]
     if body.name is not None:
         updates["name"] = body.name.strip()
         audit_meta["name"] = updates["name"]
@@ -971,12 +877,89 @@ async def admin_delete_employee(user_id: str, admin: dict = Depends(get_admin_us
     return {"ok": True}
 
 
+# --- Admin deductions (monthly meal totals in ₹) ---
+@api.get("/admin/deductions")
+async def admin_deductions(month: Optional[str] = Query(None), admin: dict = Depends(get_admin_user)):
+    """Return per-employee current-month meal counts and ₹ deductions.
+    `month` optional in YYYY-MM (defaults to current month)."""
+    if not month:
+        n = now_local()
+        month = f"{n.year:04d}-{n.month:02d}"
+    try:
+        parse_iso_date(f"{month}-01")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid month, use YYYY-MM")
+
+    prices = await get_meal_prices()
+    # Aggregate active bookings per user for this month
+    pipeline = [
+        {"$match": {
+            "meal_date": {"$regex": f"^{month}-"},
+            "status": {"$ne": "emergency_cancelled"},
+        }},
+        {"$group": {
+            "_id": {"user_id": "$user_id", "meal_type": "$meal_type"},
+            "qty": {"$sum": "$quantity"},
+        }},
+    ]
+    counts: dict = {}  # user_id -> {"breakfast": n, "dinner": n}
+    async for row in db.bookings.aggregate(pipeline):
+        uid = row["_id"]["user_id"]
+        counts.setdefault(uid, {"breakfast": 0, "dinner": 0})
+        counts[uid][row["_id"]["meal_type"]] = row["qty"]
+
+    # Merge with user records
+    result = []
+    async for u in db.users.find({}).sort("employee_number", 1):
+        uid = str(u["_id"])
+        c = counts.get(uid, {"breakfast": 0, "dinner": 0})
+        b_amt = round(c["breakfast"] * prices["breakfast"], 2)
+        d_amt = round(c["dinner"] * prices["dinner"], 2)
+        result.append({
+            "user_id": uid,
+            "employee_number": u.get("employee_number", ""),
+            "name": u.get("name", ""),
+            "role": u.get("role", "employee"),
+            "breakfast_count": c["breakfast"],
+            "dinner_count": c["dinner"],
+            "breakfast_amount": b_amt,
+            "dinner_amount": d_amt,
+            "total_amount": round(b_amt + d_amt, 2),
+        })
+    return {"month": month, "prices": prices, "employees": result}
+
+
+# --- Admin: delete bookings in date range ---
+@api.post("/admin/bookings/range-delete")
+async def admin_delete_bookings_range(body: DeleteBookingsRangeIn, admin: dict = Depends(get_admin_user)):
+    try:
+        parse_iso_date(body.from_date); parse_iso_date(body.to_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+    if body.to_date < body.from_date:
+        raise HTTPException(status_code=400, detail="'to' date must be on or after 'from' date")
+    query: dict = {"meal_date": {"$gte": body.from_date, "$lte": body.to_date}}
+    if body.meal_type:
+        query["meal_type"] = body.meal_type
+    res = await db.bookings.delete_many(query)
+    await audit(admin, "admin.bookings.range_delete",
+                target=f"{body.from_date}..{body.to_date}",
+                meta={"deleted": res.deleted_count, "meal_type": body.meal_type or "both"})
+    return {"ok": True, "deleted": res.deleted_count}
+
+
 # --- Holidays ---
 @api.get("/admin/holidays")
 async def admin_list_holidays(admin: dict = Depends(get_admin_user)):
     out = []
     async for h in db.holidays.find({}).sort("date", -1):
-        out.append({"id": str(h["_id"]), "date": h["date"], "name": h["name"], "applies_to": h.get("applies_to", "both")})
+        out.append({
+            "id": str(h["_id"]),
+            "date": h["date"],
+            "end_date": h.get("end_date", h["date"]),
+            "name": h["name"],
+            "applies_to": h.get("applies_to", "both"),
+        })
     return out
 
 
@@ -986,14 +969,32 @@ async def admin_add_holiday(body: HolidayIn, admin: dict = Depends(get_admin_use
         parse_iso_date(body.date)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid date")
-    existing = await db.holidays.find_one({"date": body.date})
-    if existing:
-        raise HTTPException(status_code=400, detail="Holiday already set for this date")
-    doc = {"date": body.date, "name": body.name.strip(), "applies_to": body.applies_to,
-           "created_at": now_local().isoformat()}
+    end_date = body.end_date
+    if end_date:
+        try:
+            if parse_iso_date(end_date) < parse_iso_date(body.date):
+                raise HTTPException(status_code=400, detail="End date must be on or after start date")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid end date")
+    else:
+        end_date = body.date
+    # Overlap check: reject if any existing holiday overlaps
+    overlap = await db.holidays.find_one({
+        "$or": [
+            {"date": {"$lte": end_date}, "end_date": {"$gte": body.date}},
+        ]
+    })
+    if overlap:
+        raise HTTPException(status_code=400, detail="A holiday already exists in this range")
+    doc = {"date": body.date, "end_date": end_date, "name": body.name.strip(),
+           "applies_to": body.applies_to, "created_at": now_local().isoformat()}
     res = await db.holidays.insert_one(doc)
-    await audit(admin, "holiday.create", target=body.date, meta={"name": body.name})
-    return {"id": str(res.inserted_id), "date": body.date, "name": body.name, "applies_to": body.applies_to}
+    await audit(admin, "holiday.create", target=body.date,
+                meta={"name": body.name, "end_date": end_date})
+    return {"id": str(res.inserted_id), "date": body.date, "end_date": end_date,
+            "name": body.name, "applies_to": body.applies_to}
 
 
 @api.delete("/admin/holidays/{holiday_id}")
@@ -1289,94 +1290,6 @@ async def admin_export_excel(
     )
 
 
-@api.post("/admin/email-report")
-async def admin_email_report(body: EmailReportIn, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
-    try:
-        parse_iso_date(body.from_date); parse_iso_date(body.to_date)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid date range")
-
-    # Build both the HTML summary AND the full xlsx. Store xlsx in Mongo keyed by
-    # a random download token — the email includes a signed one-click download link
-    # (Emergent's managed email proxy does not accept attachments directly).
-    data = await admin_summary(from_date=body.from_date, to_date=body.to_date, admin=admin)
-    xlsx_bytes = await build_report_xlsx(body.from_date, body.to_date)
-
-    dl_token = secrets.token_urlsafe(24)
-    await db.report_downloads.insert_one({
-        "token": dl_token,
-        "from_date": body.from_date,
-        "to_date": body.to_date,
-        "filename": f"mess_bookings_{body.from_date}_to_{body.to_date}.xlsx",
-        "content": xlsx_bytes,
-        "created_at": now_local().isoformat(),
-        "expires_at": datetime.now(_tz.utc) + timedelta(hours=24),
-        "created_by": admin["employee_number"],
-    })
-    base = APP_URL or ""
-    dl_link = f"{base}/api/reports/download/{dl_token}"
-
-    rows_html = "".join(
-        f"<tr>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;'>{r['employee_number']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;'>{r['name']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast_dine_in']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['breakfast_parcel']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner_dine_in']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;'>{r['dinner_parcel']}</td>"
-        f"<td style='padding:6px 8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;'>{r['total']}</td>"
-        f"</tr>"
-        for r in data["employees"]
-    )
-    html = f"""
-    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
-      <tr><td align="center">
-        <table width="700" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
-          <tr><td>
-            <h2 style="margin:0 0 8px;color:#2b1e15;">MessBook — Booking Report</h2>
-            <p style="color:#5a4a3d;margin:0 0 20px;">Period: <b>{body.from_date}</b> to <b>{body.to_date}</b></p>
-            <p style="margin:0 0 24px;">
-              <a href="{dl_link}" style="background:#c65a40;color:white;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600;display:inline-block;">Download full Excel report</a>
-            </p>
-            <p style="color:#8a7969;font-size:12px;margin:-16px 0 22px;">Link contains Summary + Bookings sheets with parcel/dine-in breakdown. Expires in 24 hours.</p>
-            <table width="100%" style="border-collapse:collapse;font-size:13px;">
-              <thead>
-                <tr style="background:#c65a40;color:white;">
-                  <th style="padding:8px;text-align:left;">Emp #</th>
-                  <th style="padding:8px;text-align:left;">Name</th>
-                  <th style="padding:8px;text-align:right;">B · Dine-in</th>
-                  <th style="padding:8px;text-align:right;">B · Parcel</th>
-                  <th style="padding:8px;text-align:right;">D · Dine-in</th>
-                  <th style="padding:8px;text-align:right;">D · Parcel</th>
-                  <th style="padding:8px;text-align:right;">Total</th>
-                </tr>
-              </thead>
-              <tbody>{rows_html or '<tr><td colspan="7" style="padding:20px;text-align:center;color:#8a7969;">No bookings in this range.</td></tr>'}</tbody>
-              <tfoot>
-                <tr style="background:#f5efe6;font-weight:700;">
-                  <td colspan="2" style="padding:8px;">Total</td>
-                  <td style="padding:8px;text-align:right;">{data['total_breakfast_dine_in']}</td>
-                  <td style="padding:8px;text-align:right;">{data['total_breakfast_parcel']}</td>
-                  <td style="padding:8px;text-align:right;">{data['total_dinner_dine_in']}</td>
-                  <td style="padding:8px;text-align:right;">{data['total_dinner_parcel']}</td>
-                  <td style="padding:8px;text-align:right;">{data['total_breakfast'] + data['total_dinner']}</td>
-                </tr>
-              </tfoot>
-            </table>
-            <p style="color:#8a7969;font-size:12px;margin-top:22px;">
-              If the button doesn't work, copy this link: <br/>
-              <span style="word-break:break-all;">{dl_link}</span>
-            </p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-    """
-    background.add_task(send_email_async, body.email, f"MessBook Report {body.from_date} → {body.to_date}", html)
-    await audit(admin, "report.email", target=body.email, meta={"from": body.from_date, "to": body.to_date, "download_token": dl_token})
-    return {"ok": True, "message": f"Report will be emailed to {body.email}", "download_link": dl_link}
-
-
 @api.get("/reports/download/{token}")
 async def download_emailed_report(token: str):
     rec = await db.report_downloads.find_one({"token": token})
@@ -1468,71 +1381,89 @@ async def admin_insights(days: int = Query(14, ge=1, le=90), admin: dict = Depen
 
 @api.post("/admin/employees/bulk")
 async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
-    """Bulk-create employees from a CSV. Header row required.
-    Columns (any order): employee_number (required), name (required), email (optional),
-    role (optional, defaults to employee), password (optional, defaults to employee_number)."""
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Please upload a .csv file")
-    try:
-        raw = (await file.read()).decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+    """Bulk create/update employees from an Excel (.xlsx) file.
 
-    reader = csvlib.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="CSV is empty or missing a header row")
-    # Normalise header names to lowercase for lookup
-    field_map = {name.strip().lower(): name for name in reader.fieldnames}
-    required = ["employee_number", "name", "email"]
-    for req in required:
-        if req not in field_map:
-            raise HTTPException(status_code=400, detail=f"CSV missing required column: {req}")
+    Required columns (header row, case-insensitive, spaces/underscores ignored):
+      - Employee ID  (alias: employee_number, id)
+      - Name         (alias: employee_name, employee name)
+      - Password
+
+    On duplicate Employee ID: name and password are UPDATED.
+    """
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Please upload a .xlsx (Excel) file")
+    try:
+        from openpyxl import load_workbook  # local import — openpyxl already installed
+        raw = await file.read()
+        wb = load_workbook(filename=io.BytesIO(raw), data_only=True, read_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read Excel file: {e}")
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows or len(rows) < 2:
+        raise HTTPException(status_code=400, detail="Excel is empty or missing data rows")
+
+    def norm(v):
+        return str(v or "").strip().lower().replace(" ", "").replace("_", "")
+
+    header = [norm(c) for c in rows[0]]
+    def find_col(*aliases):
+        for a in aliases:
+            if a in header:
+                return header.index(a)
+        return -1
+
+    idx_emp = find_col("employeeid", "employeenumber", "id", "empid")
+    idx_name = find_col("name", "employeename", "empname")
+    idx_pw = find_col("password", "pwd")
+    if idx_emp < 0 or idx_name < 0 or idx_pw < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Excel must have columns: Employee ID, Name, Password"
+        )
 
     created = 0
-    skipped = []
+    updated = 0
     errors = []
-    for idx, row in enumerate(reader, start=2):  # start=2 to reflect the actual line in the file
-        emp = (row.get(field_map["employee_number"]) or "").strip()
-        name = (row.get(field_map.get("name", "")) or "").strip()
-        email = (row.get(field_map["email"]) or "").strip().lower()
-        if not emp or not name or not email:
-            errors.append({"line": idx, "error": "employee_number, name, and email are required"})
+    for i, row in enumerate(rows[1:], start=2):
+        emp = str(row[idx_emp] or "").strip()
+        name = str(row[idx_name] or "").strip()
+        pw = str(row[idx_pw] or "").strip()
+        if not emp or not name or not pw:
+            if not any([emp, name, pw]):
+                continue  # skip fully blank rows
+            errors.append({"line": i, "error": "Employee ID, Name and Password are all required"})
             continue
-        if "@" not in email or "." not in email.split("@")[-1]:
-            errors.append({"line": idx, "error": f"invalid email '{email}'"})
-            continue
-
-        role = "employee"
-        if "role" in field_map:
-            r = (row.get(field_map["role"]) or "").strip().lower()
-            if r in ("employee", "admin", "chef"):
-                role = r
-            elif r:
-                errors.append({"line": idx, "error": f"invalid role '{r}'"})
-                continue
-
-        password = emp  # default password = their employee number
-        if "password" in field_map:
-            p = (row.get(field_map["password"]) or "").strip()
-            if p:
-                if len(p) < 4:
-                    errors.append({"line": idx, "error": "password must be at least 4 characters"})
-                    continue
-                password = p
-
-        if await db.users.find_one({"employee_number": emp}):
-            skipped.append({"line": idx, "employee_number": emp, "reason": "already exists"})
+        if len(pw) < 4:
+            errors.append({"line": i, "error": "password must be at least 4 characters"})
             continue
 
-        await db.users.insert_one({
-            "employee_number": emp, "name": name, "email": email,
-            "password_hash": hash_password(password), "role": role,
-            "created_at": now_local().isoformat(),
-        })
-        created += 1
+        existing = await db.users.find_one({"employee_number": emp})
+        if existing:
+            await db.users.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {
+                    "name": name,
+                    "password_hash": hash_password(pw),
+                    "updated_at": now_local().isoformat(),
+                }},
+            )
+            updated += 1
+        else:
+            await db.users.insert_one({
+                "employee_number": emp,
+                "name": name,
+                "email": None,
+                "password_hash": hash_password(pw),
+                "role": "employee",
+                "created_at": now_local().isoformat(),
+            })
+            created += 1
 
-    await audit(admin, "employee.bulk_import", meta={"created": created, "skipped": len(skipped), "errors": len(errors)})
-    return {"created": created, "skipped": skipped, "errors": errors}
+    await audit(admin, "employee.bulk_import",
+                meta={"created": created, "updated": updated, "errors": len(errors)})
+    return {"created": created, "updated": updated, "errors": errors}
 
 
 class AdminBookingIn(BaseModel):
@@ -1663,32 +1594,6 @@ async def admin_create_booking(body: AdminBookingOverrideIn, background: Backgro
                       "employee_name": target.get("name", ""), "meal_date": body.meal_date,
                       "meal_type": body.meal_type, "quantity": body.quantity,
                       "booking_type": body.booking_type, "reason": body.reason})
-
-    # Notify the employee via email
-    if target.get("email"):
-        html = f"""
-        <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:24px;">
-          <tr><td align="center">
-            <table width="480" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:28px;">
-              <tr><td>
-                <h2 style="margin:0 0 8px;color:#2b1e15;">A booking was created for you</h2>
-                <p style="color:#5a4a3d;line-height:1.6;">Hi {target.get('name') or 'there'}, an administrator ({admin.get('name') or '#'+admin.get('employee_number','')}) has booked a meal on your behalf:</p>
-                <ul style="color:#2b1e15;line-height:1.8;">
-                  <li><b>{body.meal_type.capitalize()}</b> on {body.meal_date}</li>
-                  <li>{body.booking_type.replace('_',' ').title()} × {body.quantity}</li>
-                </ul>
-                <div style="background:#f5efe6;border-left:3px solid #c65a40;padding:12px 14px;border-radius:6px;color:#5a4a3d;margin:16px 0;">
-                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.15em;color:#8a7969;margin-bottom:4px;">Reason</div>
-                  <div style="line-height:1.5;">{body.reason}</div>
-                </div>
-                <p style="color:#8a7969;font-size:12px;">Sign in to Baratie to view or cancel.</p>
-              </td></tr>
-            </table>
-          </td></tr>
-        </table>
-        """
-        background.add_task(send_email_async, target["email"],
-                            f"Booking created on your behalf — {body.meal_type.capitalize()} on {body.meal_date}", html)
 
     return {"id": str(res.inserted_id), "created": True}
 
@@ -1843,49 +1748,6 @@ async def admin_cancel_booking(booking_id: str, background: BackgroundTasks,
     return {"ok": True, "emailed": emailed}
 
 
-@api.post("/admin/employees/{user_id}/send-reset-email")
-async def admin_send_reset_email(user_id: str, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
-    """Trigger a password-reset email for a user (uses the same Resend flow as /auth/forgot-password)."""
-    try:
-        target = await db.users.find_one({"_id": ObjectId(user_id)})
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid user id")
-    if not target:
-        raise HTTPException(status_code=404, detail="Employee not found")
-    if not target.get("email"):
-        raise HTTPException(status_code=400, detail="Employee has no email on file")
-
-    token = secrets.token_urlsafe(32)
-    await db.password_reset_tokens.insert_one({
-        "user_id": str(target["_id"]),
-        "token": token,
-        "expires_at": now_local() + timedelta(hours=1),
-        "used": False,
-    })
-    base = APP_URL or ""
-    reset_link = f"{base}/reset-password?token={token}"
-    html = f"""
-    <table width="100%" cellpadding="0" cellspacing="0" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#faf7f2;padding:32px 0;">
-      <tr><td align="center">
-        <table width="480" cellpadding="0" cellspacing="0" style="background:white;border:1px solid #e7ddd0;border-radius:12px;padding:32px;">
-          <tr><td>
-            <h2 style="margin:0 0 12px;color:#2b1e15;">Password reset requested by administrator</h2>
-            <p style="color:#5a4a3d;line-height:1.6;">Hi {target.get('name') or 'there'}, a MessBook administrator has triggered a password reset for employee <b>{target['employee_number']}</b>. Use the link below to choose a new password. The link expires in 1 hour.</p>
-            <p style="margin:28px 0;">
-              <a href="{reset_link}" style="background:#c65a40;color:white;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600;">Reset password</a>
-            </p>
-            <p style="color:#8a7969;font-size:13px;">If the button doesn't work, paste this link in your browser:<br/><span style="word-break:break-all;">{reset_link}</span></p>
-            <p style="color:#8a7969;font-size:13px;margin-top:20px;">If you didn't expect this, please contact your mess administrator.</p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-    """
-    background.add_task(send_email_async, target["email"], "Reset your MessBook password", html)
-    await audit(admin, "admin.password_reset_email", target=target["employee_number"], meta={"to": target["email"]})
-    return {"ok": True, "sent_to": target["email"]}
-
-
 @api.post("/admin/cancel-day")
 async def admin_cancel_day(body: DayCancelIn, background: BackgroundTasks, admin: dict = Depends(get_admin_user)):
     """Cancel all bookings for a given date (breakfast, dinner, or both) with a reason,
@@ -1952,6 +1814,37 @@ async def admin_cancel_day(body: DayCancelIn, background: BackgroundTasks, admin
              "meals": info["meals"]} for info in per_user.values()
         ],
     }
+
+
+@api.get("/admin/today")
+async def admin_today(admin: dict = Depends(get_admin_user)):
+    now = now_local()
+    today = now.date().isoformat()
+    tomorrow = (now.date() + timedelta(days=1)).isoformat()
+
+    async def sum_qty(match: dict) -> int:
+        match_active = {**match, "status": {"$ne": "emergency_cancelled"}}
+        cur = db.bookings.aggregate([{"$match": match_active}, {"$group": {"_id": None, "q": {"$sum": "$quantity"}}}])
+        async for r in cur:
+            return r.get("q", 0)
+        return 0
+
+    return {
+        "today": today,
+        "tomorrow": tomorrow,
+        "breakfast_today": await sum_qty({"meal_type": "breakfast", "meal_date": today}),
+        "dinner_today": await sum_qty({"meal_type": "dinner", "meal_date": today}),
+        "breakfast_tomorrow": await sum_qty({"meal_type": "breakfast", "meal_date": tomorrow}),
+        "total_employees": await db.users.count_documents({"role": {"$in": ["employee", "chef"]}}),
+    }
+
+
+@api.get("/")
+async def root():
+    return {"service": "MessBook API", "ok": True}
+
+
+    return {"ok": True, "affected_users": len(per_user)}
 
 
 @api.get("/admin/today")

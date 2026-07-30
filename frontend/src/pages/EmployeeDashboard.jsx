@@ -173,6 +173,7 @@ export default function EmployeeDashboard() {
   const [summary, setSummary] = useState(null);
   const [holidays, setHolidays] = useState([]);
   const [cancellations, setCancellations] = useState([]);
+  const [prices, setPrices] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -186,7 +187,7 @@ export default function EmployeeDashboard() {
     try {
       const [s, m, h, c] = await Promise.all([
         client.get("/bookings/status"),
-        client.get(`/bookings/mine?month=${month}`),
+        client.get("/bookings/mine"),
         client.get("/holidays"),
         client.get(`/bookings/cancellations?month=${month}`),
       ]);
@@ -257,9 +258,36 @@ export default function EmployeeDashboard() {
             What&apos;s on the menu today?
           </h1>
           <p className="text-muted-foreground mt-3 max-w-xl leading-relaxed">
-            Book tomorrow&apos;s breakfast between 10:00 AM and 11:30 PM. Today&apos;s dinner closes at 2:30 PM. Simple.
+            Book tomorrow&apos;s breakfast between 10:00 AM and 11:30 PM. Today&apos;s dinner closes at 3:00 PM.
           </p>
         </div>
+
+        {/* Cancellation banner — big & red — when today's meal is cancelled */}
+        {status?.items?.some((i) => i.cancellation) && (
+          <div className="mb-8 space-y-3" data-testid="cancellation-banner-wrap">
+            {status.items.filter((i) => i.cancellation).map((it) => (
+              <div key={`cx-${it.meal_type}`}
+                className="rounded-2xl border-2 p-5 flex items-start gap-4"
+                style={{ backgroundColor: "#fef2f2", borderColor: "#e11d48" }}
+                data-testid={`cancellation-banner-${it.meal_type}`}
+              >
+                <AlertOctagon className="h-8 w-8 flex-shrink-0" style={{ color: "#e11d48" }} />
+                <div className="flex-1">
+                  <div className="overline mb-1" style={{ color: "#e11d48" }}>
+                    {it.meal_type === "breakfast" ? "Breakfast" : "Dinner"} cancelled · {fmtDate(it.meal_date)}
+                  </div>
+                  <div className="font-display font-bold text-xl mb-2" style={{ color: "#7f1d1d" }}>
+                    Sorry — the mess had to cancel this meal.
+                  </div>
+                  <div className="text-sm leading-relaxed" style={{ color: "#7f1d1d" }}>
+                    <span className="font-semibold">Reason: </span>
+                    {it.cancellation.reason || "No additional reason provided."}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {upcomingHolidays.length > 0 && (
           <div className="mb-8 flex flex-wrap gap-2" data-testid="upcoming-holidays">
@@ -300,7 +328,7 @@ export default function EmployeeDashboard() {
                 </div>
                 <TrendingUp className="h-5 w-5 text-muted-foreground" />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <Card className="border-border">
                   <CardContent className="p-6">
                     <div className="flex items-center gap-2 overline text-muted-foreground mb-2"><Sunrise className="h-3.5 w-3.5" /> Breakfast</div>
@@ -325,6 +353,17 @@ export default function EmployeeDashboard() {
                     <div className="flex items-baseline gap-2">
                       <span className="font-display font-extrabold text-5xl tracking-tight text-primary" data-testid="stat-total-count">{summary?.total ?? 0}</span>
                       <span className="text-muted-foreground text-sm">meals</span>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="border-border" style={{ borderColor: "#e11d48" }}>
+                  <CardContent className="p-6">
+                    <div className="flex items-center gap-2 overline mb-2" style={{ color: "#e11d48" }}><TrendingUp className="h-3.5 w-3.5" /> Deduction</div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-display font-extrabold text-5xl tracking-tight" style={{ color: "#e11d48" }} data-testid="stat-deduction">₹{summary?.deduction ?? 0}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      B ₹{summary?.breakfast_price ?? 0} · D ₹{summary?.dinner_price ?? 0}
                     </div>
                   </CardContent>
                 </Card>

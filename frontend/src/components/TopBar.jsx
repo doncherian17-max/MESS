@@ -29,11 +29,19 @@ export default function TopBar() {
       <header className="border-b border-border bg-card/80 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 flex items-center justify-between gap-4">
           <Link to={home} className="flex items-center gap-3" data-testid="topbar-logo">
-            <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
-              <UtensilsCrossed className="h-4 w-4 text-primary-foreground" />
+            <div
+              className="h-9 w-9 rounded-lg flex items-center justify-center"
+              style={{ backgroundColor: "#e11d48" }}
+            >
+              <UtensilsCrossed className="h-4 w-4 text-white" />
             </div>
             <div className="leading-tight">
-              <div className="font-display font-extrabold tracking-tight text-lg">MessBook</div>
+              <div
+                className="font-display font-extrabold tracking-tight text-lg"
+                style={{ color: "#e11d48" }}
+              >
+                SUPER MILLER
+              </div>
               <div className="overline text-muted-foreground -mt-0.5">{roleLabel(user?.role)}</div>
             </div>
           </Link>

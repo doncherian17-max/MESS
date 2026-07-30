@@ -3,13 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import LoginPage from "@/pages/LoginPage";
-import SignupPage from "@/pages/SignupPage";
-import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
-import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import EmployeeDashboard from "@/pages/EmployeeDashboard";
 import AdminDashboard from "@/pages/AdminDashboard";
 import ChefDashboard from "@/pages/ChefDashboard";
-import RequireEmailGate from "@/components/RequireEmailGate";
 import Footer from "@/components/Footer";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -50,15 +46,11 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<RootRedirect />} />
                 <Route path="/login" element={<LoginPage />} />
-                <Route path="/signup" element={<SignupPage />} />
-                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-                <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/dashboard" element={<Protected roles={["employee"]}><EmployeeDashboard /></Protected>} />
                 <Route path="/admin" element={<Protected roles={["admin"]}><AdminDashboard /></Protected>} />
                 <Route path="/chef" element={<Protected roles={["chef", "admin"]}><ChefDashboard /></Protected>} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
-              <RequireEmailGate />
               <Footer />
             </div>
           </BrowserRouter>
