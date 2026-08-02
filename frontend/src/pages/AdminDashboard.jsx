@@ -1349,8 +1349,7 @@ export default function AdminDashboard() {
               </div>
               <div className="space-y-2">
                 <Label className="overline">Reset password (optional)</Label>
-                <Input
-                  type="text"
+                <PasswordInput
                   value={editForm.password}
                   onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
                   placeholder="Type a new password to reset it (min 4 chars)"
