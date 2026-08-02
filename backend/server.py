@@ -135,14 +135,21 @@ def compute_opens_at(meal_type: str, meal_date: date_cls) -> Optional[datetime]:
                     DINNER_OPEN_HOUR, DINNER_OPEN_MIN, tzinfo=TZ)
 
 
-async def is_sunday_blocked(meal_date: str) -> bool:
-    """Sundays are Mess Off by default. Admin can whitelist a specific Sunday
-    via the sunday_overrides collection."""
+async def is_sunday_blocked(meal_date: str, meal_type: str) -> bool:
+    """Sundays are Mess Off by default per meal type.
+
+    Admin can whitelist a specific Sunday for `breakfast`, `dinner`, or `both`
+    via the `sunday_overrides` collection. Returns True only if the date is a
+    Sunday AND no override covers the requested meal_type.
+    """
     d = parse_iso_date(meal_date)
     if d.weekday() != 6:  # 6 = Sunday
         return False
     ov = await db.sunday_overrides.find_one({"date": meal_date})
-    return ov is None
+    if not ov:
+        return True
+    meals = ov.get("meals", "both")
+    return meals != "both" and meals != meal_type
 
 
 async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict] = None):

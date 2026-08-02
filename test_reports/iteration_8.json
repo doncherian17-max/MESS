@@ -1,0 +1,37 @@
+{
+  "summary": "Validated the is_sunday_blocked(meal_date, meal_type) fix end-to-end. Backend: 14 pytest cases pass, 1 skipped (only relevant when tomorrow is Sunday). Employee login (612480/newpass123) works, /api/bookings/status now returns HTTP 200 with new fields day_label + sunday_off (bool) + cancellation (nullable). Frontend: Employee dashboard passes 'Loading your dashboard…' and renders both meal-card-breakfast and meal-card-dinner (Booked/Open badges visible) with zero /api/ errors captured. Admin edit-employee dialog exposes the 'Reset password (optional)' field with data-testid=edit-employee-password-input; admin password reset round-trip verified (612480 -> tmp -> back to newpass123). Sunday overrides CRUD (POST/GET/DELETE) works and stores meals='breakfast'|'dinner'|'both' correctly. Non-Sunday dates are never Sunday-blocked. Brand is 'SUPER MILER' on login, employee dashboard and admin console; no 'SUPER MILLER' or 'Baratie' strings anywhere.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminDashboard edit-employee dialog", "issue": "Reset-password input renders with type='text' instead of type='password'; the new password is visible on screen when admin types it. Should be a masked input (or PasswordInput with visibility toggle) for basic shoulder-surfing protection.", "selector": "[data-testid=\"edit-employee-password-input\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_sunday_meal_blocking.py",
+    "/app/test_reports/pytest/iteration8.xml"
+  ],
+  "action_items": [
+    "Consider changing edit-employee-password-input from type='text' to type='password' (or use the existing PasswordInput component) so the reset password isn't shown in cleartext."
+  ],
+  "critical_code_review_comments": [
+    "is_sunday_blocked(meal_date, meal_type) implementation in server.py is correct: returns True on Sunday when no override, or when the override's meals field doesn't cover the requested meal_type ('breakfast'|'dinner') and isn't 'both'. Type signature matches the caller in booking_status (server.py:431) and create_booking (server.py:482).",
+    "In create_booking, opens_at check runs before is_sunday_blocked; this is fine but means booking attempts for Sundays outside the booking window return an 'opens at' error rather than a Sunday-off error. Not a bug, but noted for future UX polish if you want a Sunday-specific message earlier.",
+    "server.py is 2139 lines and mixes helpers, routes, admin, and payroll logic. Consider splitting into modules (auth.py, bookings.py, admin.py, payroll.py) for maintainability — file-size guideline of ~700 lines is exceeded.",
+    "AdminDashboard.jsx (~1380 lines) has grown large; splitting per tab (Bookings, Employees, Emergency, Holidays, Menu, Audit) into sub-components would help maintainability and test isolation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8_sunday_meal_blocking.py"
+  ],
+  "success_rate": {"backend": "100% (14/14 executed, 1 conditional skip)", "frontend": "100% of tested flows"},
+  "test_credentials": "Admin 135791/admin@123, Employee 612480/newpass123 (restored to original after password-rotation regression test).",
+  "seed_data_creation": "None persistent. All sunday_overrides created during tests are deleted at the end of the same test. TEST_ prefixed employees left over from prior iterations still exist in the DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login field data-testid is 'login-employee-input' (not 'login-employee-number-input'). Auth response returns 'token' (not 'access_token'). Payroll export expects month=YYYY-MM (single param). Prices endpoint for admin PUT is /api/admin/settings/prices (public GET at /api/settings/prices). The per-meal Sunday POST /bookings test cannot actually exercise the Sunday-block branch unless today is Saturday/Sunday because opens_at check runs first — so we verify override storage roundtrip + a conditional booking_status.sunday_off flip when tomorrow is Sunday.",
+  "rca_of_the_issue": "Root cause was a reverted 1-arg signature of is_sunday_blocked while the caller in booking_status passed 2 args (meal_date, meal_type), which raised TypeError inside GET /api/bookings/status -> HTTP 500 -> EmployeeDashboard stuck at 'Loading your dashboard…'. Fix (already applied by main agent) reintroduced the (meal_date, meal_type) signature and per-meal override check against sunday_overrides.meals ∈ {breakfast, dinner, both}. Verified via pytest (bookings/status now 200 with day_label/sunday_off/cancellation) and browser (dashboard renders both meal cards)."
+}
