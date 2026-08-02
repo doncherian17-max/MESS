@@ -65,6 +65,11 @@ export default function AdminDashboard() {
   const [newHoliday, setNewHoliday] = useState({ date: "", end_date: "", name: "", applies_to: "both" });
   const [holidayBusy, setHolidayBusy] = useState(false);
 
+  // Sunday overrides — open a specific Sunday for breakfast/dinner/both
+  const [sundayOverrides, setSundayOverrides] = useState([]);
+  const [newSunOv, setNewSunOv] = useState({ date: "", meals: "both" });
+  const [sunOvBusy, setSunOvBusy] = useState(false);
+
   // Menu
   const [menuEntries, setMenuEntries] = useState([]);
   const [newMenu, setNewMenu] = useState({ date: todayISO(), meal_type: "breakfast", items: "" });
@@ -136,6 +141,34 @@ export default function AdminDashboard() {
       setHolidays(data);
     } catch (err) { toast.error(formatApiError(err)); }
   };
+  const loadSundayOverrides = async () => {
+    try {
+      const { data } = await client.get("/admin/sunday-overrides");
+      setSundayOverrides(data);
+    } catch (err) { /* silent */ }
+  };
+  const addSundayOverride = async (e) => {
+    e.preventDefault();
+    if (!newSunOv.date) { toast.error("Pick a Sunday"); return; }
+    const d = new Date(newSunOv.date + "T00:00:00");
+    if (d.getDay() !== 0) { toast.error("Selected date is not a Sunday"); return; }
+    setSunOvBusy(true);
+    try {
+      await client.post("/admin/sunday-overrides", newSunOv);
+      toast.success(`Sunday opened for ${newSunOv.meals}`);
+      setNewSunOv({ date: "", meals: "both" });
+      await loadSundayOverrides();
+    } catch (err) { toast.error(formatApiError(err)); }
+    finally { setSunOvBusy(false); }
+  };
+  const removeSundayOverride = async (date) => {
+    if (!window.confirm(`Close bookings again for Sunday ${date}?`)) return;
+    try {
+      await client.delete(`/admin/sunday-overrides/${date}`);
+      toast.success("Sunday closed again");
+      await loadSundayOverrides();
+    } catch (err) { toast.error(formatApiError(err)); }
+  };
   const loadMenu = async () => {
     try {
       const { data } = await client.get("/admin/menu");
@@ -203,7 +236,7 @@ export default function AdminDashboard() {
     URL.revokeObjectURL(a.href);
   };
 
-  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadMenu(); loadWeeklyMenu(); loadPrices(); loadDeductions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadTop(); loadSummary(); loadHolidays(); loadSundayOverrides(); loadMenu(); loadWeeklyMenu(); loadPrices(); loadDeductions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadPrices = async () => {
     try {
@@ -1028,6 +1061,82 @@ export default function AdminDashboard() {
                           <TableCell className="text-right">
                             <Button variant="ghost" size="sm" onClick={() => removeHoliday(h.id)}
                               data-testid={`delete-holiday-${h.id}`} className="text-destructive hover:text-destructive">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Sunday overrides — open a Sunday for booking */}
+            <Card className="border-border" data-testid="sunday-overrides-card">
+              <CardContent className="p-6 lg:p-8">
+                <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <h3 className="font-display text-2xl font-bold flex items-center gap-2" style={{ color: "#e11d48" }}>
+                      Open Sundays
+                    </h3>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                      Sundays are Mess Off by default. Pick any Sunday and choose which meals to open — Breakfast only, Dinner only, or Both. Employees will be able to book that day immediately.
+                    </p>
+                  </div>
+                </div>
+
+                <form onSubmit={addSundayOverride} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6 items-end">
+                  <div className="space-y-2 md:col-span-2">
+                    <Label className="overline">Sunday date</Label>
+                    <Input type="date" value={newSunOv.date}
+                      onChange={(e) => setNewSunOv({ ...newSunOv, date: e.target.value })}
+                      required className="h-11" data-testid="new-sunday-date" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="overline">Open for</Label>
+                    <Select value={newSunOv.meals} onValueChange={(v) => setNewSunOv({ ...newSunOv, meals: v })}>
+                      <SelectTrigger className="h-11" data-testid="new-sunday-meals"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="both">Breakfast &amp; Dinner</SelectItem>
+                        <SelectItem value="breakfast">Breakfast only</SelectItem>
+                        <SelectItem value="dinner">Dinner only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button type="submit" disabled={sunOvBusy} data-testid="add-sunday-override"
+                    className="rounded-full h-11 gap-2 text-white" style={{ backgroundColor: "#e11d48" }}>
+                    {sunOvBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" /> Open Sunday</>}
+                  </Button>
+                </form>
+
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40">
+                        <TableHead className="py-4">Sunday</TableHead>
+                        <TableHead>Open for</TableHead>
+                        <TableHead>Opened by</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sundayOverrides.length === 0 ? (
+                        <TableRow><TableCell colSpan={4} className="text-center py-10 text-muted-foreground" data-testid="sunday-overrides-empty">
+                          No Sundays are open yet. Sundays default to Mess Off.
+                        </TableCell></TableRow>
+                      ) : sundayOverrides.map((s) => (
+                        <TableRow key={s.date} data-testid={`sunday-override-row-${s.date}`}>
+                          <TableCell className="py-4 font-mono-plex">{s.date}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="rounded-full" style={{ borderColor: "#e11d48", color: "#e11d48" }}>
+                              {s.meals === "both" ? "Breakfast & Dinner" : s.meals === "breakfast" ? "Breakfast only" : "Dinner only"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{s.created_by || "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <Button variant="ghost" size="sm" onClick={() => removeSundayOverride(s.date)}
+                              data-testid={`delete-sunday-override-${s.date}`} className="text-destructive hover:text-destructive">
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </TableCell>

@@ -421,7 +421,7 @@ async def booking_status(user: dict = Depends(get_current_user)):
             "meal_date": meal_date.isoformat(),
         })
         holiday = await is_holiday(meal_date.isoformat(), meal_type)
-        sunday_off = await is_sunday_blocked(meal_date.isoformat())
+        sunday_off = await is_sunday_blocked(meal_date.isoformat(), meal_type)
         ec = await is_emergency_cancelled(meal_date.isoformat(), meal_type, str(user["_id"]))
         cancellation = None
         if ec:
@@ -472,8 +472,8 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
     if holiday:
         raise HTTPException(status_code=400, detail=f"{body.meal_type.capitalize()} not available: {holiday['name']} holiday")
 
-    if await is_sunday_blocked(body.meal_date):
-        raise HTTPException(status_code=400, detail="Sundays are Mess Off. Please contact the admin if bookings should be opened for this Sunday.")
+    if await is_sunday_blocked(body.meal_date, body.meal_type):
+        raise HTTPException(status_code=400, detail=f"Sunday is Mess Off — {body.meal_type} is not available. Please contact the admin if bookings should be opened.")
 
     emerg = await is_emergency_cancelled(body.meal_date, body.meal_type, user_id=str(user["_id"]))
     if emerg:
@@ -1052,6 +1052,7 @@ async def admin_delete_holiday(holiday_id: str, admin: dict = Depends(get_admin_
 # --- Sunday overrides (open bookings for a specific Sunday) ---
 class SundayOverrideIn(BaseModel):
     date: str
+    meals: Literal["breakfast", "dinner", "both"] = "both"
 
 
 @api.get("/admin/sunday-overrides")
@@ -1059,6 +1060,7 @@ async def admin_list_sunday_overrides(admin: dict = Depends(get_admin_user)):
     out = []
     async for s in db.sunday_overrides.find({}).sort("date", -1):
         out.append({"id": str(s["_id"]), "date": s["date"],
+                    "meals": s.get("meals", "both"),
                     "created_by": s.get("created_by", ""),
                     "created_at": s.get("created_at", "")})
     return out
@@ -1072,14 +1074,17 @@ async def admin_add_sunday_override(body: SundayOverrideIn, admin: dict = Depend
         raise HTTPException(status_code=400, detail="Invalid date")
     if d.weekday() != 6:
         raise HTTPException(status_code=400, detail="Sunday overrides only apply to Sundays")
-    existing = await db.sunday_overrides.find_one({"date": body.date})
-    if existing:
-        raise HTTPException(status_code=400, detail="This Sunday is already opened for bookings")
-    doc = {"date": body.date, "created_by": admin["employee_number"],
+    doc = {"date": body.date, "meals": body.meals,
+           "created_by": admin["employee_number"],
            "created_at": now_local().isoformat()}
-    res = await db.sunday_overrides.insert_one(doc)
-    await audit(admin, "sunday_override.add", target=body.date)
-    return {"id": str(res.inserted_id), "date": body.date}
+    await db.sunday_overrides.update_one(
+        {"date": body.date},
+        {"$set": doc},
+        upsert=True,
+    )
+    await audit(admin, "sunday_override.upsert",
+                target=body.date, meta={"meals": body.meals})
+    return {"date": body.date, "meals": body.meals}
 
 
 @api.delete("/admin/sunday-overrides/{date}")
@@ -1093,11 +1098,11 @@ async def admin_delete_sunday_override(date: str, admin: dict = Depends(get_admi
 
 @api.get("/sunday-off-info")
 async def get_sunday_off_info(user: dict = Depends(get_current_user)):
-    """Public endpoint: list Sundays that admin has explicitly opened."""
+    """Public: list Sundays that admin has explicitly opened (and for which meals)."""
     now = now_local().date()
     out = []
     async for s in db.sunday_overrides.find({"date": {"$gte": now.isoformat()}}).sort("date", 1):
-        out.append({"date": s["date"]})
+        out.append({"date": s["date"], "meals": s.get("meals", "both")})
     return {"policy": "Sundays are Mess Off by default", "open_sundays": out}
 
 

@@ -219,6 +219,30 @@ export default function EmployeeDashboard() {
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Dinner reminder — fires once between 18:55 and 19:05 local time,
+  // when tomorrow's dinner just opened for booking.
+  useEffect(() => {
+    const key = `dinner_reminder_${new Date().toISOString().slice(0, 10)}`;
+    const check = () => {
+      const n = new Date();
+      const mins = n.getHours() * 60 + n.getMinutes();
+      const inWindow = mins >= 18 * 60 + 55 && mins <= 19 * 60 + 5;
+      if (!inWindow) return;
+      if (sessionStorage.getItem(key)) return;
+      const dinnerItem = status?.items?.find((i) => i.meal_type === "dinner");
+      if (!dinnerItem) return;
+      if (dinnerItem.booked || dinnerItem.holiday || dinnerItem.sunday_off || dinnerItem.cancellation) return;
+      sessionStorage.setItem(key, "1");
+      toast(
+        `Tomorrow's dinner just opened — book by 3:00 PM tomorrow.`,
+        { duration: 8000, icon: "🍽️" }
+      );
+    };
+    check();
+    const iv = setInterval(check, 60 * 1000);
+    return () => clearInterval(iv);
+  }, [status]);
+
   const book = async (item, extra) => {
     setBusyKey(item.meal_type);
     try {

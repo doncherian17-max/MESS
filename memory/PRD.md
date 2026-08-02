@@ -1,51 +1,52 @@
 # SUPER MILER — Mess Meal Booking
 
 ## Product
-Publicly accessible mess meal booking web app for breakfast and dinner. Employees log in, book breakfast between 10:00 AM and 11:30 PM the day before, and book dinner from **7:00 PM the previous day** until **3:00 PM the day of** (Next-Day Dinner rolling window).
+Publicly accessible mess meal booking web app. Employees book breakfast (10 AM → 11:30 PM day before) and dinner (7 PM day before → 3 PM day of, rolling window). Sundays default to Mess Off; admins can open any Sunday for breakfast, dinner, or both.
 
 ## Roles
-- Employee — login, book meals, view current-month bookings + ₹ deduction
-- Admin — full ops (employees, prices, menus, holidays, deductions, cancellations, sunday overrides)
-- Chef — see today's counts and menu, mark as served
+- Employee — login, book, view current month + ₹ deduction, 6:55 PM dinner reminder toast
+- Admin — employees, prices, menus, holidays, Sunday overrides, deductions, cancellations
+- Chef — today's counts + menu, live refresh
 
 ## Tech stack (production)
-- Frontend: React (CRA 5), Tailwind + Shadcn UI, Recharts, Lucide — deployed on Vercel
-- Backend: FastAPI + Motor + JWT + bcrypt + openpyxl — deployed on Render
-- Database: MongoDB Atlas (M0 free tier)
-- No email dispatch (removed Feb 2026)
+- Frontend: React (CRA 5) + Tailwind + Shadcn UI — Vercel
+- Backend: FastAPI + Motor + JWT + bcrypt + openpyxl — Render
+- DB: MongoDB Atlas M0
 
-## Booking windows (Asia/Kolkata)
-- **Breakfast** (for tomorrow): 10:00 AM → 11:30 PM the day before
-- **Dinner** (Next-Day Dinner rolling): 7:00 PM the day before → 3:00 PM the day of
-- **Sundays**: Mess Off by default — bookings blocked. Admin can whitelist any Sunday via `sunday_overrides`.
+## Booking rules (Asia/Kolkata)
+- Breakfast: 10:00 AM → 11:30 PM the day before
+- Dinner: 7:00 PM day before → 3:00 PM day of (rolling)
+- Sunday default = Mess Off; per-meal override (breakfast/dinner/both) via admin
 
-## Features implemented (latest)
-- [x] Rename SUPER MILLER → **SUPER MILER** everywhere
-- [x] **Sunday = Mess Off** by default; blocked in `create_booking` via `is_sunday_blocked()`
-- [x] **Admin Sunday Override** endpoints: GET/POST/DELETE `/api/admin/sunday-overrides` (validates weekday == Sunday)
-- [x] **Next-Day Dinner** window: dinner opens 7:00 PM previous day; booking card auto-rolls to Tomorrow after 3 PM cutoff
-- [x] Employee dashboard shows explicit **"Booking for TODAY" / "Booking for TOMORROW"** (green/red overline)
-- [x] "Sunday · Mess Off" badge on meal card when applicable
-- [x] `sunday_overrides` collection with unique index on `date`
-- [x] Public `/api/sunday-off-info` endpoint
+## Latest features
+- [x] SUPER MILER brand rename everywhere
+- [x] Sunday Mess Off + per-meal admin override (breakfast/dinner/both)
+- [x] Admin **Open Sundays** UI card in Holidays tab (add/remove overrides, per-meal choice, upsert semantics)
+- [x] Employee 6:55–7:05 PM in-app **Dinner Reminder** toast (once per day via sessionStorage)
+- [x] Today/Tomorrow overline on booking cards; Sunday-off badge
+- [x] Next-Day Dinner rolling (opens_at = 7 PM prev day; card rolls to tomorrow after 3 PM cutoff)
 
 ## Previously delivered
-- Employee-only login (self-signup + email removed)
-- Excel bulk employee upload (Employee ID · Name · Password); upsert
-- Meal prices (₹) global settings
-- Monthly ₹ deduction on employee dashboard
-- Payroll ledger export (`GET /api/admin/payroll-export?month=YYYY-MM`)
+- Employee-only login (no signup/email)
+- Excel bulk employee upload (upsert on Employee ID)
+- Meal prices (₹) global settings + monthly deduction on employee dashboard
+- Payroll ledger XLSX export
 - Delete bookings by date range
-- Holidays as date ranges (From – To)
+- Holiday date ranges
 - Cancellation reason banner
 - Current-month-only booking history
-- Weekly Mon–Sun menu with date-specific overrides
-- Admin/chef live counts, emergency cancellations, audit log
+- Weekly Mon–Sun menu + date-specific overrides
+- Chef auto-refresh, emergency cancellations, audit log
 
-## Performance
-- Existing indexes: users.employee_number (unique), bookings (compound + meal_date), holidays.date (unique), menus (compound unique), weekly_menus (compound unique), audit_logs.timestamp, sunday_overrides.date (unique)
-- Frontend already uses code-splitting via CRA + lazy hydration; toasts are non-blocking; auto-refresh only on chef page
-- Note: to compress assets further, add `compression` middleware or serve via Cloudflare (out of scope for this task)
+## Endpoints (highlights)
+- `POST /api/auth/login`
+- `GET /api/bookings/status` — returns day_label, sunday_off, cancellation
+- `POST /api/bookings` — enforces Sunday guard per meal_type
+- `GET/POST /api/admin/sunday-overrides` — per-meal (`meals`: breakfast/dinner/both). Upsert on repeat POST.
+- `DELETE /api/admin/sunday-overrides/{date}`
+- `GET /api/sunday-off-info` — public policy + upcoming open Sundays
+- `GET /api/admin/deductions?month=YYYY-MM`
+- `GET /api/admin/payroll-export?month=YYYY-MM`
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.
