@@ -35,7 +35,7 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
   const Icon = isBreakfast ? Sunrise : Moon;
   const colorClass = isBreakfast ? "meal-breakfast" : "meal-dinner";
   const label = isBreakfast ? "Breakfast" : "Dinner";
-  const targetLabel = isBreakfast ? "Tomorrow" : "Today";
+  const targetLabel = item.day_label || (isBreakfast ? "Tomorrow" : "Today");
 
   const [qty, setQty] = useState(item.quantity || 1);
   const [type, setType] = useState(item.booking_type || "dine_in");
@@ -47,7 +47,8 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
 
   const holiday = item.holiday;
   const notYetOpen = !!item.not_yet_open;
-  const disabled = item.cutoff_passed || !!holiday || notYetOpen;
+  const sundayOff = !!item.sunday_off;
+  const disabled = item.cutoff_passed || !!holiday || notYetOpen || sundayOff;
 
   return (
     <Card className={`${colorClass} card-lift border-border overflow-hidden`} data-testid={`meal-card-${item.meal_type}`}>
@@ -55,14 +56,20 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
       <CardContent className="p-6 lg:p-8">
         <div className="flex items-start justify-between mb-5">
           <div>
-            <p className="overline text-muted-foreground mb-2">{targetLabel}&apos;s meal</p>
+            <p className="overline mb-2" style={{ color: targetLabel === "Today" ? "#059669" : "#e11d48", fontWeight: 700 }}>
+              {targetLabel === "Today" ? "Booking for TODAY" : targetLabel === "Tomorrow" ? "Booking for TOMORROW" : `${targetLabel}'s meal`}
+            </p>
             <h3 className="font-display text-3xl font-extrabold tracking-tight flex items-center gap-3">
               <Icon className="h-7 w-7" style={{ color: `hsl(var(--meal-color))` }} />
               {label}
             </h3>
             <p className="text-muted-foreground text-sm mt-2 font-mono-plex">{fmtDate(item.meal_date)}</p>
           </div>
-          {holiday ? (
+          {sundayOff ? (
+            <Badge variant="outline" className="rounded-full border-destructive text-destructive" data-testid={`badge-sunday-off-${item.meal_type}`}>
+              <XCircle className="h-3 w-3 mr-1" /> Sunday · Mess Off
+            </Badge>
+          ) : holiday ? (
             <Badge variant="outline" className="rounded-full border-destructive text-destructive" data-testid={`badge-holiday-${item.meal_type}`}>
               <PartyPopper className="h-3 w-3 mr-1" /> {holiday.name}
             </Badge>
@@ -154,7 +161,8 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
             className="w-full h-11 rounded-full font-semibold"
             style={{ backgroundColor: `hsl(var(--meal-color))`, color: "white" }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : (
-              holiday ? "Holiday — closed"
+              sundayOff ? "Sunday — Mess Off"
+                : holiday ? "Holiday — closed"
                 : notYetOpen ? `Opens ${fmtDateTime(item.opens_at)}`
                 : item.cutoff_passed ? "Cutoff passed"
                 : `Book ${label} (${qty})`

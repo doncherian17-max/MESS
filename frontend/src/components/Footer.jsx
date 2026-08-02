@@ -9,7 +9,7 @@ export default function Footer() {
           className="font-display font-extrabold tracking-tight"
           style={{ color: "#e11d48" }}
         >
-          SUPER MILLER
+          SUPER MILER
         </span>
         <span className="mx-1.5">©</span>
         <span>2026</span>

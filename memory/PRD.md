@@ -1,71 +1,51 @@
-# SUPER MILLER — Mess Meal Booking
+# SUPER MILER — Mess Meal Booking
 
-## Original problem
-Publicly accessible mess meal booking web app for breakfast and dinner. Employees log in, book breakfast before 11:30 PM and dinner before 3:00 PM (updated from 2:30 PM), view current-month meal totals and ₹ deductions. Admins create/update employee accounts via Excel upload, set meal prices, manage weekly menus, mark holidays as date ranges, and delete booking data by date range.
+## Product
+Publicly accessible mess meal booking web app for breakfast and dinner. Employees log in, book breakfast between 10:00 AM and 11:30 PM the day before, and book dinner from **7:00 PM the previous day** until **3:00 PM the day of** (Next-Day Dinner rolling window).
 
 ## Roles
-- Employee — login, book meals, view current month bookings and monthly ₹ deduction
-- Admin — full ops (employees, prices, menus, holidays, reports, deductions, cancellations)
+- Employee — login, book meals, view current-month bookings + ₹ deduction
+- Admin — full ops (employees, prices, menus, holidays, deductions, cancellations, sunday overrides)
 - Chef — see today's counts and menu, mark as served
 
 ## Tech stack (production)
-- Frontend: React (CRA 5), Tailwind + Shadcn UI, Recharts, Lucide icons — deployed on Vercel
+- Frontend: React (CRA 5), Tailwind + Shadcn UI, Recharts, Lucide — deployed on Vercel
 - Backend: FastAPI + Motor + JWT + bcrypt + openpyxl — deployed on Render
 - Database: MongoDB Atlas (M0 free tier)
-- No email dispatch (removed Feb 2026 per requirements)
+- No email dispatch (removed Feb 2026)
 
-## Deployment
-- render.yaml at repo root (rootDir: backend)
-- backend/requirements-prod.txt (slim; used by Render)
-- frontend/vercel.json (yarn install, CI=false so ESLint warnings don't fail builds)
-- CORS_ORIGINS env var must include Vercel URL
+## Booking windows (Asia/Kolkata)
+- **Breakfast** (for tomorrow): 10:00 AM → 11:30 PM the day before
+- **Dinner** (Next-Day Dinner rolling): 7:00 PM the day before → 3:00 PM the day of
+- **Sundays**: Mess Off by default — bookings blocked. Admin can whitelist any Sunday via `sunday_overrides`.
 
-## Features implemented
-- [x] Employee login only (self-signup removed)
-- [x] Admin/chef/employee role separation
-- [x] Booking with dine-in/parcel + quantity
-- [x] Booking cutoffs: Breakfast 11:30 PM, Dinner 3:00 PM (updated Feb 2026)
-- [x] Weekly menu Mon–Sun with breakfast/dinner + date override
-- [x] Date-specific menu overrides weekly template
-- [x] Excel upload for bulk employee create/update (Employee ID, Name, Password); duplicate ID → update name + reset password
-- [x] Meal prices (₹) global settings — breakfast + dinner
-- [x] Admin deductions view — per-employee current-month totals in ₹
-- [x] Delete bookings by date range (keeps employees)
-- [x] Holidays as date ranges (From – To)
-- [x] Cancellation reason banner on employee dashboard (big red banner)
-- [x] Current-month-only booking history for employees
-- [x] Excel report export (download)
-- [x] Emergency cancellations with reason
-- [x] Audit log
-- [x] SUPER MILLER red-branded UI throughout
-- [x] Footer credit: Baratie renamed to SUPER MILLER; "Designed & Developed by Don Cherian & Arjun T S"
-- [x] Chef auto-refresh + live booking counts
+## Features implemented (latest)
+- [x] Rename SUPER MILLER → **SUPER MILER** everywhere
+- [x] **Sunday = Mess Off** by default; blocked in `create_booking` via `is_sunday_blocked()`
+- [x] **Admin Sunday Override** endpoints: GET/POST/DELETE `/api/admin/sunday-overrides` (validates weekday == Sunday)
+- [x] **Next-Day Dinner** window: dinner opens 7:00 PM previous day; booking card auto-rolls to Tomorrow after 3 PM cutoff
+- [x] Employee dashboard shows explicit **"Booking for TODAY" / "Booking for TOMORROW"** (green/red overline)
+- [x] "Sunday · Mess Off" badge on meal card when applicable
+- [x] `sunday_overrides` collection with unique index on `date`
+- [x] Public `/api/sunday-off-info` endpoint
 
-## Removed (Feb 2026 per user)
-- Self-registration (/signup, /auth/register)
-- Forgot/reset password (/forgot-password, /reset-password)
-- Email sending (Resend/Emergent Email integration) — `send_email_async` and `send_apology_email` retained as no-op stubs for backwards compatibility
-- Email column requirement (email still stored in DB but hidden from UI)
-- /admin/email-report endpoint
-- /admin/employees/{id}/send-reset-email endpoint
-- RequireEmailGate component
+## Previously delivered
+- Employee-only login (self-signup + email removed)
+- Excel bulk employee upload (Employee ID · Name · Password); upsert
+- Meal prices (₹) global settings
+- Monthly ₹ deduction on employee dashboard
+- Payroll ledger export (`GET /api/admin/payroll-export?month=YYYY-MM`)
+- Delete bookings by date range
+- Holidays as date ranges (From – To)
+- Cancellation reason banner
+- Current-month-only booking history
+- Weekly Mon–Sun menu with date-specific overrides
+- Admin/chef live counts, emergency cancellations, audit log
 
-## Key endpoints
-- POST /api/auth/login
-- GET/PATCH /api/auth/me, POST /api/auth/change-password
-- GET /api/settings/prices (any auth)
-- PUT /api/admin/settings/prices
-- GET /api/admin/deductions?month=YYYY-MM
-- POST /api/admin/bookings/range-delete
-- POST /api/admin/employees/bulk (accepts .xlsx: Employee ID, Name, Password)
-- POST /api/admin/holidays (with optional end_date)
-- GET /api/bookings/mine (current month only, includes deduction)
-- GET /api/bookings/status (now returns cancellation.reason when a meal is emergency-cancelled)
-- GET/PUT/DELETE /api/admin/weekly-menu
+## Performance
+- Existing indexes: users.employee_number (unique), bookings (compound + meal_date), holidays.date (unique), menus (compound unique), weekly_menus (compound unique), audit_logs.timestamp, sunday_overrides.date (unique)
+- Frontend already uses code-splitting via CRA + lazy hydration; toasts are non-blocking; auto-refresh only on chef page
+- Note: to compress assets further, add `compression` middleware or serve via Cloudflare (out of scope for this task)
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.
-
-## Known trade-offs
-- Report emailing removed by product decision — Excel can still be downloaded
-- Free Render tier cold-starts ~30 s after 15 min idle

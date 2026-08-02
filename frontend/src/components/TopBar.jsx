@@ -40,7 +40,7 @@ export default function TopBar() {
                 className="font-display font-extrabold tracking-tight text-lg"
                 style={{ color: "#e11d48" }}
               >
-                SUPER MILLER
+                SUPER MILER
               </div>
               <div className="overline text-muted-foreground -mt-0.5">{roleLabel(user?.role)}</div>
             </div>

@@ -107,6 +107,10 @@ def user_public(u: dict) -> dict:
     }
 
 
+DINNER_OPEN_HOUR = 19  # Next-day dinner window opens 7 PM the previous day
+DINNER_OPEN_MIN = 0
+
+
 def compute_cutoff(meal_type: str, meal_date: date_cls) -> datetime:
     if meal_type == "breakfast":
         cutoff_day = meal_date - timedelta(days=1)
@@ -117,12 +121,28 @@ def compute_cutoff(meal_type: str, meal_date: date_cls) -> datetime:
 
 
 def compute_opens_at(meal_type: str, meal_date: date_cls) -> Optional[datetime]:
-    """When the booking window opens. Dinner has no explicit opening — returns None."""
+    """When the booking window opens.
+
+    Breakfast: 10:00 AM the day before.
+    Dinner: 7:00 PM the day before (Next-Day Dinner window).
+    """
     if meal_type == "breakfast":
         open_day = meal_date - timedelta(days=1)
         return datetime(open_day.year, open_day.month, open_day.day,
                         BREAKFAST_OPEN_HOUR, BREAKFAST_OPEN_MIN, tzinfo=TZ)
-    return None
+    open_day = meal_date - timedelta(days=1)
+    return datetime(open_day.year, open_day.month, open_day.day,
+                    DINNER_OPEN_HOUR, DINNER_OPEN_MIN, tzinfo=TZ)
+
+
+async def is_sunday_blocked(meal_date: str) -> bool:
+    """Sundays are Mess Off by default. Admin can whitelist a specific Sunday
+    via the sunday_overrides collection."""
+    d = parse_iso_date(meal_date)
+    if d.weekday() != 6:  # 6 = Sunday
+        return False
+    ov = await db.sunday_overrides.find_one({"date": meal_date})
+    return ov is None
 
 
 async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict] = None):
@@ -387,8 +407,12 @@ async def booking_status(user: dict = Depends(get_current_user)):
     today = now.date()
     tomorrow = today + timedelta(days=1)
 
+    # Next-Day Dinner rolling window: after today's 3 PM cutoff, the dinner card rolls to TOMORROW.
+    today_dinner_cutoff = compute_cutoff("dinner", today)
+    dinner_target = today if now < today_dinner_cutoff else tomorrow
+
     results = []
-    for meal_type, meal_date in [("breakfast", tomorrow), ("dinner", today)]:
+    for meal_type, meal_date in [("breakfast", tomorrow), ("dinner", dinner_target)]:
         cutoff = compute_cutoff(meal_type, meal_date)
         opens_at = compute_opens_at(meal_type, meal_date)
         existing = await db.bookings.find_one({
@@ -397,9 +421,21 @@ async def booking_status(user: dict = Depends(get_current_user)):
             "meal_date": meal_date.isoformat(),
         })
         holiday = await is_holiday(meal_date.isoformat(), meal_type)
+        sunday_off = await is_sunday_blocked(meal_date.isoformat())
+        ec = await is_emergency_cancelled(meal_date.isoformat(), meal_type, str(user["_id"]))
+        cancellation = None
+        if ec:
+            cancellation = {
+                "reason": ec.get("reason", ""),
+                "meal_type": ec.get("meal_type", meal_type),
+                "date": ec.get("date", meal_date.isoformat()),
+                "created_at": ec.get("created_at"),
+            }
+        day_label = "Today" if meal_date == today else ("Tomorrow" if meal_date == tomorrow else meal_date.isoformat())
         results.append({
             "meal_type": meal_type,
             "meal_date": meal_date.isoformat(),
+            "day_label": day_label,
             "cutoff": cutoff.isoformat(),
             "cutoff_passed": now >= cutoff,
             "opens_at": opens_at.isoformat() if opens_at else None,
@@ -409,6 +445,8 @@ async def booking_status(user: dict = Depends(get_current_user)):
             "quantity": existing.get("quantity", 1) if existing else None,
             "booking_type": existing.get("booking_type", "dine_in") if existing else None,
             "holiday": {"name": holiday["name"]} if holiday else None,
+            "sunday_off": sunday_off,
+            "cancellation": cancellation,
         })
     return {"now": now.isoformat(), "items": results}
 
@@ -433,6 +471,9 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
     holiday = await is_holiday(body.meal_date, body.meal_type)
     if holiday:
         raise HTTPException(status_code=400, detail=f"{body.meal_type.capitalize()} not available: {holiday['name']} holiday")
+
+    if await is_sunday_blocked(body.meal_date):
+        raise HTTPException(status_code=400, detail="Sundays are Mess Off. Please contact the admin if bookings should be opened for this Sunday.")
 
     emerg = await is_emergency_cancelled(body.meal_date, body.meal_type, user_id=str(user["_id"]))
     if emerg:
@@ -1006,6 +1047,58 @@ async def admin_delete_holiday(holiday_id: str, admin: dict = Depends(get_admin_
     await db.holidays.delete_one({"_id": oid})
     await audit(admin, "holiday.delete", target=holiday_id)
     return {"ok": True}
+
+
+# --- Sunday overrides (open bookings for a specific Sunday) ---
+class SundayOverrideIn(BaseModel):
+    date: str
+
+
+@api.get("/admin/sunday-overrides")
+async def admin_list_sunday_overrides(admin: dict = Depends(get_admin_user)):
+    out = []
+    async for s in db.sunday_overrides.find({}).sort("date", -1):
+        out.append({"id": str(s["_id"]), "date": s["date"],
+                    "created_by": s.get("created_by", ""),
+                    "created_at": s.get("created_at", "")})
+    return out
+
+
+@api.post("/admin/sunday-overrides")
+async def admin_add_sunday_override(body: SundayOverrideIn, admin: dict = Depends(get_admin_user)):
+    try:
+        d = parse_iso_date(body.date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date")
+    if d.weekday() != 6:
+        raise HTTPException(status_code=400, detail="Sunday overrides only apply to Sundays")
+    existing = await db.sunday_overrides.find_one({"date": body.date})
+    if existing:
+        raise HTTPException(status_code=400, detail="This Sunday is already opened for bookings")
+    doc = {"date": body.date, "created_by": admin["employee_number"],
+           "created_at": now_local().isoformat()}
+    res = await db.sunday_overrides.insert_one(doc)
+    await audit(admin, "sunday_override.add", target=body.date)
+    return {"id": str(res.inserted_id), "date": body.date}
+
+
+@api.delete("/admin/sunday-overrides/{date}")
+async def admin_delete_sunday_override(date: str, admin: dict = Depends(get_admin_user)):
+    res = await db.sunday_overrides.delete_one({"date": date})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No override found for this date")
+    await audit(admin, "sunday_override.remove", target=date)
+    return {"ok": True}
+
+
+@api.get("/sunday-off-info")
+async def get_sunday_off_info(user: dict = Depends(get_current_user)):
+    """Public endpoint: list Sundays that admin has explicitly opened."""
+    now = now_local().date()
+    out = []
+    async for s in db.sunday_overrides.find({"date": {"$gte": now.isoformat()}}).sort("date", 1):
+        out.append({"date": s["date"]})
+    return {"policy": "Sundays are Mess Off by default", "open_sundays": out}
 
 
 # --- Menu ---
@@ -1999,6 +2092,10 @@ async def startup():
     await db.bookings.create_index([("user_id", 1), ("meal_type", 1), ("meal_date", 1)], unique=True)
     await db.bookings.create_index("meal_date")
     await db.holidays.create_index("date", unique=True)
+    try:
+        await db.sunday_overrides.create_index("date", unique=True)
+    except Exception:
+        pass
     await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)
     await db.weekly_menus.create_index([("day_of_week", 1), ("meal_type", 1)], unique=True)
     await db.audit_logs.create_index("timestamp")

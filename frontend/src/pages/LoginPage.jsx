@@ -49,12 +49,12 @@ export default function LoginPage() {
               <div className="h-10 w-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: BRAND_RED }}>
                 <UtensilsCrossed className="h-5 w-5 text-white" />
               </div>
-              <span className="font-display font-extrabold text-xl tracking-tight">SUPER MILLER</span>
+              <span className="font-display font-extrabold text-xl tracking-tight">SUPER MILER</span>
             </div>
             <div className="max-w-md">
               <p className="overline text-white/70 mb-4">Employee Mess Portal</p>
               <h1 className="font-display font-extrabold text-4xl lg:text-5xl leading-tight tracking-tight">
-                Welcome to <span style={{ color: BRAND_RED }}>SUPER MILLER</span>.
+                Welcome to <span style={{ color: BRAND_RED }}>SUPER MILER</span>.
               </h1>
               <p className="mt-6 text-white/80 leading-relaxed">
                 Book your breakfast and dinner, track your monthly meals and deductions, all in one place.
@@ -68,7 +68,7 @@ export default function LoginPage() {
             <div className="mb-10">
               <p className="overline text-muted-foreground mb-3">Employee sign-in</p>
               <h2 className="font-display text-4xl font-extrabold tracking-tight">
-                Welcome to <span style={{ color: BRAND_RED }}>SUPER MILLER</span>.
+                Welcome to <span style={{ color: BRAND_RED }}>SUPER MILER</span>.
               </h2>
               <p className="text-muted-foreground mt-3 leading-relaxed">
                 Enter your Employee ID and password provided by your administrator.

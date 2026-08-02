@@ -461,7 +461,7 @@ export default function AdminDashboard() {
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-10 lg:py-14" data-testid="admin-dashboard">
         <div className="mb-10">
           <p className="overline text-muted-foreground mb-3 flex items-center gap-1.5"><ShieldCheck className="h-3 w-3" /> Admin Console</p>
-          <h1 className="font-display text-4xl lg:text-5xl font-extrabold tracking-tight" style={{ color: "#e11d48" }}>SUPER MILLER</h1>
+          <h1 className="font-display text-4xl lg:text-5xl font-extrabold tracking-tight" style={{ color: "#e11d48" }}>SUPER MILER</h1>
           <p className="text-muted-foreground mt-3 leading-relaxed max-w-xl">
             Manage employees, plan menus, set meal prices, mark holidays, and export attendance for any date range.
           </p>
