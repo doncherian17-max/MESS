@@ -357,20 +357,6 @@ export default function AdminDashboard() {
     } catch (err) { toast.error(formatApiError(err)); }
   };
 
-  const sendResetEmail = async () => {
-    if (!editUser) return;
-    if (!editUser.email && !editForm.email.trim()) {
-      toast.error("This user has no email — set one first."); return;
-    }
-    if (!window.confirm(`Email a password-reset link to ${editUser.email || editForm.email}?`)) return;
-    setEditBusy(true);
-    try {
-      const { data } = await client.post(`/admin/employees/${editUser.id}/send-reset-email`);
-      toast.success(`Reset link sent to ${data.sent_to}`);
-    } catch (err) { toast.error(formatApiError(err)); }
-    finally { setEditBusy(false); }
-  };
-
   const openEdit = (u) => {
     setEditUser(u);
     setEditForm({ email: u.email || "", name: u.name || "", password: "" });
@@ -1345,13 +1331,13 @@ export default function AdminDashboard() {
           </TabsContent>
         </Tabs>
 
-        {/* Edit employee dialog (email / name) */}
+        {/* Edit employee dialog */}
         <Dialog open={!!editUser} onOpenChange={(v) => { if (!v) setEditUser(null); }}>
           <DialogContent data-testid="edit-employee-dialog">
             <DialogHeader>
               <DialogTitle>Edit employee</DialogTitle>
               <DialogDescription>
-                Update contact details for <span className="font-mono-plex">#{editUser?.employee_number}</span>. Employees receive cancellation notices and password-reset links at their email on file.
+                Update details for <span className="font-mono-plex">#{editUser?.employee_number}</span>. Leave the password blank to keep it unchanged.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={submitEdit} className="space-y-4">
@@ -1362,24 +1348,27 @@ export default function AdminDashboard() {
                   data-testid="edit-employee-name-input" className="h-11" />
               </div>
               <div className="space-y-2">
-                <Label className="overline">Email</Label>
-                <Input type="email" value={editForm.email}
-                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                  placeholder="user@company.com"
-                  data-testid="edit-employee-email-input" className="h-11" />
+                <Label className="overline">Reset password (optional)</Label>
+                <Input
+                  type="text"
+                  value={editForm.password}
+                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                  placeholder="Type a new password to reset it (min 4 chars)"
+                  minLength={4}
+                  autoComplete="new-password"
+                  data-testid="edit-employee-password-input"
+                  className="h-11 font-mono-plex"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use this if the employee forgot their password. Share the new one with them directly.
+                </p>
               </div>
-              <DialogFooter className="gap-2 sm:justify-between">
-                <Button type="button" variant="outline" onClick={sendResetEmail}
-                  disabled={editBusy || !editUser?.email}
-                  data-testid="edit-employee-send-reset-email" className="gap-2 rounded-full">
-                  <Mail className="h-3.5 w-3.5" /> Send reset link
+              <DialogFooter className="gap-2">
+                <Button type="button" variant="ghost" onClick={() => setEditUser(null)}>Cancel</Button>
+                <Button type="submit" disabled={editBusy} data-testid="edit-employee-submit"
+                  className="text-white" style={{ backgroundColor: "#e11d48" }}>
+                  {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}
                 </Button>
-                <div className="flex gap-2">
-                  <Button type="button" variant="ghost" onClick={() => setEditUser(null)}>Cancel</Button>
-                  <Button type="submit" disabled={editBusy} data-testid="edit-employee-submit">
-                    {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-                  </Button>
-                </div>
               </DialogFooter>
             </form>
           </DialogContent>
