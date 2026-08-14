@@ -1,8 +1,77 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import client from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { X, PartyPopper } from "lucide-react";
+import { X, PartyPopper, Volume2, VolumeX } from "lucide-react";
+
+const MUTE_STORAGE_KEY = "birthday_cheer_muted";
+
+// Play a synthesized ~3s cheer chime using Web Audio API.
+// Returns a stop() fn. Never throws; silent on unsupported browsers.
+function playCheerChime(audioCtx) {
+  const ctx = audioCtx;
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = 0.001;
+  master.gain.exponentialRampToValueAtTime(0.5, now + 0.05);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 3.0);
+  master.connect(ctx.destination);
+
+  // Rising arpeggio: C5 - E5 - G5 - C6 - E6
+  const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+  notes.forEach((freq, i) => {
+    const t = now + i * 0.12;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    osc.connect(g); g.connect(master);
+    osc.start(t); osc.stop(t + 0.55);
+  });
+
+  // Sustained cheer chord at 0.9s
+  const chordStart = now + 0.9;
+  [523.25, 659.25, 783.99].forEach((freq) => {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, chordStart);
+    g.gain.exponentialRampToValueAtTime(0.15, chordStart + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, chordStart + 1.6);
+    osc.connect(g); g.connect(master);
+    osc.start(chordStart); osc.stop(chordStart + 1.7);
+  });
+
+  // Whoosh "cheer" noise bursts (party horn feel)
+  [1.7, 2.1].forEach((delay) => {
+    const t = now + delay;
+    const bufSize = Math.floor(ctx.sampleRate * 0.35);
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 1600;
+    bp.Q.value = 8;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.35, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.4);
+  });
+
+  return () => {
+    try { master.gain.cancelScheduledValues(ctx.currentTime); master.gain.value = 0; } catch { /* noop */ }
+  };
+}
 
 const RED = "#e11d48";
 const DEFAULT_AVATAR = (name) =>
@@ -53,6 +122,34 @@ export default function BirthdayModal({ user }) {
   const [birthdays, setBirthdays] = useState([]);
   const [open, setOpen] = useState(false);
   const [idx, setIdx] = useState(0);
+  const [muted, setMuted] = useState(() => {
+    try { return localStorage.getItem(MUTE_STORAGE_KEY) === "1"; } catch { return false; }
+  });
+  const audioCtxRef = useRef(null);
+  const stopRef = useRef(null);
+
+  const stopCheer = () => {
+    if (stopRef.current) { try { stopRef.current(); } catch { /* noop */ } stopRef.current = null; }
+  };
+
+  const playCheer = () => {
+    stopCheer();
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtxRef.current) audioCtxRef.current = new Ctx();
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+      stopRef.current = playCheerChime(ctx);
+    } catch { /* silent — some browsers block autoplay */ }
+  };
+
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    try { localStorage.setItem(MUTE_STORAGE_KEY, next ? "1" : "0"); } catch { /* noop */ }
+    if (next) stopCheer(); else if (open) playCheer();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +169,13 @@ export default function BirthdayModal({ user }) {
     return () => { cancelled = true; };
   }, [user?.id]);
 
+  // Play cheer when modal opens (unless muted). Stop on close.
+  useEffect(() => {
+    if (open && !muted) playCheer();
+    if (!open) stopCheer();
+    return stopCheer;
+  }, [open]);
+
   if (!birthdays.length) return null;
   const b = birthdays[idx];
   const total = birthdays.length;
@@ -87,6 +191,18 @@ export default function BirthdayModal({ user }) {
           boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)",
         }}>
           <Confetti />
+
+          <button
+            onClick={toggleMute}
+            className="absolute top-3 left-3 z-20 h-8 w-8 rounded-full flex items-center justify-center bg-white/80 hover:bg-white transition"
+            data-testid="birthday-mute-toggle"
+            aria-label={muted ? "Unmute cheer sound" : "Mute cheer sound"}
+            title={muted ? "Unmute cheer" : "Mute cheer"}
+          >
+            {muted
+              ? <VolumeX className="h-4 w-4" style={{ color: RED }} />
+              : <Volume2 className="h-4 w-4" style={{ color: RED }} />}
+          </button>
 
           <button
             onClick={() => setOpen(false)}
