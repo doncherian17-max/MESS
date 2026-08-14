@@ -19,6 +19,7 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - Sunday default = Mess Off; per-meal override (breakfast/dinner/both) via admin
 
 ## Latest features
+- [x] **Admin Birthday Editor** — Admin → Employees tab now has a Birthdays card with search, month filter, Today-only toggle, Add/Edit/Delete, photo upload with auto-resize to 512×512 JPEG (Pillow, backend), admin comment, and live preview card (Feb 2026)
 - [x] SUPER MILER brand rename everywhere
 - [x] Sunday Mess Off + per-meal admin override (breakfast/dinner/both)
 - [x] Admin **Open Sundays** UI card in Holidays tab (add/remove overrides, per-meal choice, upsert semantics)
@@ -47,6 +48,11 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - `GET /api/sunday-off-info` — public policy + upcoming open Sundays
 - `GET /api/admin/deductions?month=YYYY-MM`
 - `GET /api/admin/payroll-export?month=YYYY-MM`
+- `GET /api/admin/birthdays` — list all employee birthdays (photo, comment, mmdd)
+- `POST /api/admin/birthdays` — upsert (user_id, mmdd, photo, comment). Photo auto-resized to 512×512 JPEG.
+- `PATCH /api/admin/birthdays/{id}` — supports `{mmdd, photo, comment, clear_photo}`
+- `DELETE /api/admin/birthdays/{id}`
+- `GET /api/birthdays/today` — used by employee dashboard BirthdayModal
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.

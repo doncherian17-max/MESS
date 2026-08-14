@@ -19,6 +19,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import AdminBookingsTab from "@/components/AdminBookingsTab";
 import EmergencyCancellationsTab from "@/components/EmergencyCancellationsTab";
+import BirthdayEditor from "@/components/BirthdayEditor";
 import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import {
@@ -978,6 +979,7 @@ export default function AdminDashboard() {
                     </TableBody>
                   </Table>
                 </div>
+                <BirthdayEditor employees={employees} />
               </CardContent>
             </Card>
           </TabsContent>

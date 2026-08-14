@@ -6,6 +6,7 @@ load_dotenv(ROOT_DIR / ".env", override=False)
 
 import os
 import io
+import base64
 import logging
 import secrets
 from datetime import datetime, timedelta, date as date_cls, timezone as _tz
@@ -1712,6 +1713,35 @@ BIRTHDAY_MESSAGE_TEMPLATE = ("🎉 Happy Birthday, {name}! Wishing you a wonderf
                              "year ahead! 🎊")
 
 
+def _resize_photo_data_url(photo: Optional[str], size: int = 512) -> Optional[str]:
+    """Center-crop to square, resize to `size`, return JPEG data URL.
+    Passes through non-data-URL strings (external URLs) untouched.
+    Returns None for empty input."""
+    if not photo or not isinstance(photo, str):
+        return photo or None
+    if not photo.startswith("data:image/"):
+        return photo
+    try:
+        from PIL import Image
+        _, b64data = photo.split(",", 1)
+        raw = base64.b64decode(b64data)
+        img = Image.open(io.BytesIO(raw))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        m = min(w, h)
+        left = (w - m) // 2
+        top = (h - m) // 2
+        img = img.crop((left, top, left + m, top + m))
+        img = img.resize((size, size), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        logging.warning(f"Photo resize failed: {e}")
+        return photo
+
+
 class BirthdayIn(BaseModel):
     user_id: str
     mmdd: str = Field(pattern=r"^\d{2}-\d{2}$")
@@ -1723,6 +1753,7 @@ class BirthdayPatchIn(BaseModel):
     mmdd: Optional[str] = Field(default=None, pattern=r"^\d{2}-\d{2}$")
     photo: Optional[str] = None
     comment: Optional[str] = None
+    clear_photo: Optional[bool] = False
 
 
 @api.get("/birthdays/today")
@@ -1769,10 +1800,11 @@ async def admin_add_birthday(body: BirthdayIn, admin: dict = Depends(get_admin_u
         raise HTTPException(status_code=400, detail="Invalid user id")
     if not u:
         raise HTTPException(status_code=404, detail="Employee not found")
+    photo = _resize_photo_data_url(body.photo)
     doc = {
         "user_id": str(u["_id"]), "employee_number": u.get("employee_number", ""),
         "name": u.get("name", ""), "mmdd": body.mmdd,
-        "photo": body.photo, "comment": body.comment,
+        "photo": photo, "comment": body.comment,
         "updated_at": now_local().isoformat(),
     }
     await db.birthdays.update_one(
@@ -1782,7 +1814,16 @@ async def admin_add_birthday(body: BirthdayIn, admin: dict = Depends(get_admin_u
     )
     await audit(admin, "birthday.upsert", target=u.get("employee_number", ""),
                 meta={"mmdd": body.mmdd})
-    return doc
+    saved = await db.birthdays.find_one({"user_id": str(u["_id"])})
+    return {
+        "id": str(saved["_id"]),
+        "user_id": saved.get("user_id", ""),
+        "employee_number": saved.get("employee_number", ""),
+        "name": saved.get("name", ""),
+        "mmdd": saved.get("mmdd", ""),
+        "photo": saved.get("photo") or None,
+        "comment": saved.get("comment") or None,
+    }
 
 
 @api.patch("/admin/birthdays/{birthday_id}")
@@ -1796,7 +1837,10 @@ async def admin_update_birthday(birthday_id: str, body: BirthdayPatchIn, admin: 
         raise HTTPException(status_code=404, detail="Birthday not found")
     updates = {"updated_at": now_local().isoformat()}
     if body.mmdd is not None: updates["mmdd"] = body.mmdd
-    if body.photo is not None: updates["photo"] = body.photo
+    if body.clear_photo:
+        updates["photo"] = None
+    elif body.photo is not None:
+        updates["photo"] = _resize_photo_data_url(body.photo)
     if body.comment is not None: updates["comment"] = body.comment
     await db.birthdays.update_one({"_id": oid}, {"$set": updates})
     await audit(admin, "birthday.update", target=existing.get("employee_number", ""),
