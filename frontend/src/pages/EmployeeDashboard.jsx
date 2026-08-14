@@ -182,6 +182,7 @@ export default function EmployeeDashboard() {
   const [holidays, setHolidays] = useState([]);
   const [cancellations, setCancellations] = useState([]);
   const [prices, setPrices] = useState(null);
+  const [greeting, setGreeting] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -293,6 +294,27 @@ export default function EmployeeDashboard() {
             Book tomorrow&apos;s breakfast between 10:00 AM and 11:30 PM. Today&apos;s dinner closes at 3:00 PM.
           </p>
         </div>
+
+        {/* Special-day greeting banner */}
+        {greeting && (
+          <div
+            className="mb-8 rounded-2xl border-2 p-5 flex items-center gap-4"
+            style={{ backgroundColor: "#fff7ed", borderColor: "#e11d48" }}
+            data-testid="greeting-banner"
+          >
+            <div className="text-4xl leading-none" data-testid="greeting-emoji">{greeting.emoji}</div>
+            <div className="flex-1">
+              <div className="overline mb-1" style={{ color: "#e11d48", fontWeight: 700 }}
+                data-testid="greeting-name">
+                {greeting.name}
+              </div>
+              <div className="font-display font-bold text-xl" style={{ color: "#7f1d1d" }}
+                data-testid="greeting-message">
+                {greeting.message}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Cancellation banner — big & red — when today's meal is cancelled */}
         {status?.items?.some((i) => i.cancellation) && (

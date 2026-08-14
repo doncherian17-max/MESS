@@ -2073,6 +2073,44 @@ async def root():
     return {"service": "MessBook API", "ok": True}
 
 
+# ---------------- Greetings (special days) ----------------
+DEFAULT_SPECIAL_DAYS = [
+    {"mmdd": "01-01", "name": "New Year", "message": "Happy New Year! May your year be full of good food and great memories.", "emoji": "🎉"},
+    {"mmdd": "01-14", "name": "Makar Sankranti / Pongal", "message": "Wishing you a joyful Makar Sankranti — sweet ties, sweeter days ahead.", "emoji": "🌾"},
+    {"mmdd": "01-26", "name": "Republic Day", "message": "Happy Republic Day! Proud to serve you today.", "emoji": "🇮🇳"},
+    {"mmdd": "05-01", "name": "Labour Day", "message": "Happy Labour Day — hats off to everyone who keeps things running.", "emoji": "🛠️"},
+    {"mmdd": "08-15", "name": "Independence Day", "message": "Happy Independence Day! Wishing you pride, freedom, and a great meal.", "emoji": "🇮🇳"},
+    {"mmdd": "10-02", "name": "Gandhi Jayanti", "message": "On Gandhi Jayanti, wishing you a peaceful and thoughtful day.", "emoji": "🕊️"},
+    {"mmdd": "12-25", "name": "Christmas", "message": "Merry Christmas! Enjoy a warm meal with those you love.", "emoji": "🎄"},
+]
+
+
+async def seed_special_days():
+    for d in DEFAULT_SPECIAL_DAYS:
+        await db.special_days.update_one(
+            {"mmdd": d["mmdd"]},
+            {"$setOnInsert": d},
+            upsert=True,
+        )
+
+
+@api.get("/greetings/today")
+async def greetings_today(user: dict = Depends(get_current_user)):
+    n = now_local()
+    key = f"{n.month:02d}-{n.day:02d}"
+    doc = await db.special_days.find_one({"mmdd": key})
+    if not doc:
+        return {"today": n.date().isoformat(), "greeting": None}
+    return {
+        "today": n.date().isoformat(),
+        "greeting": {
+            "name": doc.get("name", ""),
+            "message": doc.get("message", ""),
+            "emoji": doc.get("emoji", "🎊"),
+        },
+    }
+
+
 # ---------------- Startup ----------------
 async def seed_admin():
     emp = os.environ.get("ADMIN_EMPLOYEE_NUMBER", "ADMIN")
@@ -2120,6 +2158,7 @@ async def startup():
     except Exception:
         pass
     await seed_admin()
+    await seed_special_days()
 
 
 @app.on_event("shutdown")

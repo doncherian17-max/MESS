@@ -263,9 +263,17 @@ export default function AdminBookingsTab({ employees }) {
                     </div>
                     <div className="space-y-2">
                       <Label className="overline">Quantity</Label>
-                      <Input type="number" min={1} max={5} value={add.quantity}
-                        onChange={(e) => setAdd({ ...add, quantity: Math.max(1, Math.min(5, Number(e.target.value) || 1)) })}
-                        className="h-11" data-testid="force-book-qty" />
+                      <Select value={String(add.quantity)}
+                        onValueChange={(v) => setAdd({ ...add, quantity: Math.max(1, Math.min(5, Number(v) || 1)) })}>
+                        <SelectTrigger className="h-11" data-testid="force-book-qty"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">1</SelectItem>
+                          <SelectItem value="2">2</SelectItem>
+                          <SelectItem value="3">3</SelectItem>
+                          <SelectItem value="4">4</SelectItem>
+                          <SelectItem value="5">5</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                   <div className="space-y-2">

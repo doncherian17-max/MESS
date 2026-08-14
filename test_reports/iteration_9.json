@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 9 validates the admin add-booking Quantity Select fix, the new /api/greetings/today endpoint + Employee dashboard greeting banner, and regressions (bookings/status, dashboard load, SUPER MILER brand). Backend: 6/6 pytest tests pass. Frontend Playwright: Employee dashboard loads with both Breakfast & Dinner cards, no greeting banner today (today is Aug 14 IST, no matching seeded MM-DD). Admin Add-Booking Quantity dropdown exposes exactly [1,2,3,4,5]; values 2, 3 and 4 are individually selectable and reflected in the trigger. Bug reproduction of the browser-native number spinner (values 1 and 5 only) confirmed fixed by switch to Shadcn Select.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9_greetings_and_qty.py",
+    "/app/test_reports/pytest/iteration9.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~2178 lines — consider splitting into modules (auth, bookings, admin, greetings, menu) for maintainability.",
+    "seed_special_days() uses $setOnInsert which is idempotent — good. Consider adding an index on special_days.mmdd for O(1) lookups if scale grows.",
+    "greetings_today() correctly uses timezone-aware now_local() (Asia/Kolkata) — matches admin scheduling logic.",
+    "AdminBookingsTab Quantity Select clamps via Math.max/min — defensive, good."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration9_greetings_and_qty.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin 135791/admin@123, Employee 612480/newpass123 (as provided)",
+  "seed_data_creation": "test_greetings_today_with_injected_entry temporarily inserts a special_days doc for today's IST MM-DD if none exists, verifies non-null greeting response, and deletes it. The 7 default seeded entries (01-01,01-14,01-26,05-01,08-15,10-02,12-25) are untouched. test_force_book_quantity_3 creates a booking with quantity=3 for employee 612480 on today+30 days breakfast, verifies quantity=3 in Mongo, then deletes it.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login endpoint returns token in body ({\"token\": ..., \"user\": ...}); use Authorization: Bearer header. Admin employees list is at GET /api/admin/employees. Admin force-book endpoint is POST /api/admin/bookings (not /admin/bookings/force). Greetings endpoint requires bearer auth. Quantity Select uses data-testid='force-book-qty' with role='option' items 1..5. Greeting banner test requires today's IST MM-DD to match a seeded row; inject a temp special_days doc if needed."
+}
