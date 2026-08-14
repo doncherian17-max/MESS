@@ -1581,18 +1581,20 @@ async def admin_insights(days: int = Query(14, ge=1, le=90), admin: dict = Depen
 async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
     """Bulk create/update employees from an Excel (.xlsx) file.
 
-    Required columns (header row, case-insensitive, spaces/underscores ignored):
-      - Employee ID  (alias: employee_number, id)
-      - Name         (alias: employee_name, employee name)
-      - Password
+    Columns (header row, case-insensitive, spaces/dots/underscores ignored):
+      - Employee ID / Pers.No. / employee_number   (required)
+      - Name                                       (required)
+      - Password                                   (optional — if missing, uses Employee ID as default password)
+      - Date of Birth / DOB / Birthday             (optional — any common date format; MM-DD is stored so birthday repeats yearly)
+      - Photo                                      (optional — data URL or leave blank; admin can upload later)
 
-    On duplicate Employee ID: name and password are UPDATED.
+    On duplicate Employee ID: name and (if provided) password are UPDATED.
     """
     filename = (file.filename or "").lower()
     if not filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Please upload a .xlsx (Excel) file")
     try:
-        from openpyxl import load_workbook  # local import — openpyxl already installed
+        from openpyxl import load_workbook
         raw = await file.read()
         wb = load_workbook(filename=io.BytesIO(raw), data_only=True, read_only=True)
     except Exception as e:
@@ -1603,7 +1605,7 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
         raise HTTPException(status_code=400, detail="Excel is empty or missing data rows")
 
     def norm(v):
-        return str(v or "").strip().lower().replace(" ", "").replace("_", "")
+        return str(v or "").strip().lower().replace(" ", "").replace("_", "").replace(".", "")
 
     header = [norm(c) for c in rows[0]]
     def find_col(*aliases):
@@ -1612,56 +1614,208 @@ async def admin_bulk_employees(file: UploadFile = File(...), admin: dict = Depen
                 return header.index(a)
         return -1
 
-    idx_emp = find_col("employeeid", "employeenumber", "id", "empid")
+    idx_emp = find_col("employeeid", "employeenumber", "persno", "id", "empid")
     idx_name = find_col("name", "employeename", "empname")
     idx_pw = find_col("password", "pwd")
-    if idx_emp < 0 or idx_name < 0 or idx_pw < 0:
+    idx_dob = find_col("dateofbirth", "dob", "birthday", "birthdate")
+    idx_photo = find_col("photo", "photourl", "picture", "image")
+    if idx_emp < 0 or idx_name < 0:
         raise HTTPException(
             status_code=400,
-            detail="Excel must have columns: Employee ID, Name, Password"
+            detail="Excel must have columns: Employee ID (or Pers.No.), Name (Password optional; Date of Birth optional; Photo optional)"
         )
 
-    created = 0
-    updated = 0
+    def parse_dob_mmdd(v):
+        if v is None or v == "":
+            return None
+        # openpyxl returns datetime for date cells
+        if hasattr(v, "month") and hasattr(v, "day"):
+            return f"{v.month:02d}-{v.day:02d}"
+        s = str(v).strip()
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y",
+                    "%m/%d/%Y", "%m-%d-%Y", "%d %b %Y", "%d %B %Y"):
+            try:
+                d = datetime.strptime(s, fmt)
+                return f"{d.month:02d}-{d.day:02d}"
+            except Exception:
+                continue
+        return None
+
+    created = updated = birthdays_added = 0
     errors = []
     for i, row in enumerate(rows[1:], start=2):
-        emp = str(row[idx_emp] or "").strip()
-        name = str(row[idx_name] or "").strip()
-        pw = str(row[idx_pw] or "").strip()
-        if not emp or not name or not pw:
-            if not any([emp, name, pw]):
-                continue  # skip fully blank rows
-            errors.append({"line": i, "error": "Employee ID, Name and Password are all required"})
+        # openpyxl may return floats for numeric cells → strip trailing .0
+        raw_emp = row[idx_emp]
+        emp = ""
+        if raw_emp is not None:
+            emp = str(raw_emp).strip()
+            if emp.endswith(".0"):
+                emp = emp[:-2]
+        name = str(row[idx_name] or "").strip() if idx_name >= 0 else ""
+        pw = str(row[idx_pw] or "").strip() if idx_pw >= 0 else ""
+        dob_mmdd = parse_dob_mmdd(row[idx_dob]) if idx_dob >= 0 else None
+        photo = str(row[idx_photo] or "").strip() if idx_photo >= 0 else ""
+
+        if not emp or not name:
+            if not any([emp, name]):
+                continue
+            errors.append({"line": i, "error": "Employee ID and Name are required"})
             continue
+
+        if not pw:
+            pw = emp  # default password = employee number
         if len(pw) < 4:
             errors.append({"line": i, "error": "password must be at least 4 characters"})
             continue
 
         existing = await db.users.find_one({"employee_number": emp})
         if existing:
-            await db.users.update_one(
-                {"_id": existing["_id"]},
-                {"$set": {
-                    "name": name,
-                    "password_hash": hash_password(pw),
-                    "updated_at": now_local().isoformat(),
-                }},
-            )
+            updates_doc = {"name": name, "updated_at": now_local().isoformat()}
+            if row[idx_pw] not in (None, "") if idx_pw >= 0 else False:
+                updates_doc["password_hash"] = hash_password(pw)
+            await db.users.update_one({"_id": existing["_id"]}, {"$set": updates_doc})
+            user_id = str(existing["_id"])
             updated += 1
         else:
-            await db.users.insert_one({
-                "employee_number": emp,
-                "name": name,
-                "email": None,
-                "password_hash": hash_password(pw),
-                "role": "employee",
+            insert_doc = {
+                "employee_number": emp, "name": name, "email": None,
+                "password_hash": hash_password(pw), "role": "employee",
                 "created_at": now_local().isoformat(),
-            })
+            }
+            r = await db.users.insert_one(insert_doc)
+            user_id = str(r.inserted_id)
             created += 1
 
+        if dob_mmdd:
+            set_doc = {"user_id": user_id, "employee_number": emp,
+                       "name": name, "mmdd": dob_mmdd,
+                       "updated_at": now_local().isoformat()}
+            if photo:
+                set_doc["photo"] = photo
+            await db.birthdays.update_one(
+                {"user_id": user_id},
+                {"$set": set_doc, "$setOnInsert": {"created_at": now_local().isoformat()}},
+                upsert=True,
+            )
+            birthdays_added += 1
+
     await audit(admin, "employee.bulk_import",
-                meta={"created": created, "updated": updated, "errors": len(errors)})
-    return {"created": created, "updated": updated, "errors": errors}
+                meta={"created": created, "updated": updated,
+                      "birthdays": birthdays_added, "errors": len(errors)})
+    return {"created": created, "updated": updated,
+            "birthdays": birthdays_added, "errors": errors}
+
+
+# ---------------- Birthdays ----------------
+BIRTHDAY_MESSAGE_TEMPLATE = ("🎉 Happy Birthday, {name}! Wishing you a wonderful day filled "
+                             "with happiness, success, and great moments. Have a fantastic "
+                             "year ahead! 🎊")
+
+
+class BirthdayIn(BaseModel):
+    user_id: str
+    mmdd: str = Field(pattern=r"^\d{2}-\d{2}$")
+    photo: Optional[str] = None
+    comment: Optional[str] = None
+
+
+class BirthdayPatchIn(BaseModel):
+    mmdd: Optional[str] = Field(default=None, pattern=r"^\d{2}-\d{2}$")
+    photo: Optional[str] = None
+    comment: Optional[str] = None
+
+
+@api.get("/birthdays/today")
+async def birthdays_today(user: dict = Depends(get_current_user)):
+    """Return the list of employees whose birthday is today (MM-DD match)."""
+    n = now_local()
+    key = f"{n.month:02d}-{n.day:02d}"
+    cards = []
+    async for b in db.birthdays.find({"mmdd": key}):
+        name = b.get("name", "there")
+        cards.append({
+            "id": str(b["_id"]),
+            "user_id": b.get("user_id", ""),
+            "employee_number": b.get("employee_number", ""),
+            "name": name,
+            "photo": b.get("photo") or None,
+            "message": BIRTHDAY_MESSAGE_TEMPLATE.format(name=name),
+            "comment": b.get("comment") or None,
+        })
+    return {"today": n.date().isoformat(), "birthdays": cards}
+
+
+@api.get("/admin/birthdays")
+async def admin_list_birthdays(admin: dict = Depends(get_admin_user)):
+    out = []
+    async for b in db.birthdays.find({}).sort("mmdd", 1):
+        out.append({
+            "id": str(b["_id"]),
+            "user_id": b.get("user_id", ""),
+            "employee_number": b.get("employee_number", ""),
+            "name": b.get("name", ""),
+            "mmdd": b.get("mmdd", ""),
+            "photo": b.get("photo") or None,
+            "comment": b.get("comment") or None,
+        })
+    return out
+
+
+@api.post("/admin/birthdays")
+async def admin_add_birthday(body: BirthdayIn, admin: dict = Depends(get_admin_user)):
+    try:
+        u = await db.users.find_one({"_id": ObjectId(body.user_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user id")
+    if not u:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    doc = {
+        "user_id": str(u["_id"]), "employee_number": u.get("employee_number", ""),
+        "name": u.get("name", ""), "mmdd": body.mmdd,
+        "photo": body.photo, "comment": body.comment,
+        "updated_at": now_local().isoformat(),
+    }
+    await db.birthdays.update_one(
+        {"user_id": str(u["_id"])},
+        {"$set": doc, "$setOnInsert": {"created_at": now_local().isoformat()}},
+        upsert=True,
+    )
+    await audit(admin, "birthday.upsert", target=u.get("employee_number", ""),
+                meta={"mmdd": body.mmdd})
+    return doc
+
+
+@api.patch("/admin/birthdays/{birthday_id}")
+async def admin_update_birthday(birthday_id: str, body: BirthdayPatchIn, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(birthday_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    existing = await db.birthdays.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Birthday not found")
+    updates = {"updated_at": now_local().isoformat()}
+    if body.mmdd is not None: updates["mmdd"] = body.mmdd
+    if body.photo is not None: updates["photo"] = body.photo
+    if body.comment is not None: updates["comment"] = body.comment
+    await db.birthdays.update_one({"_id": oid}, {"$set": updates})
+    await audit(admin, "birthday.update", target=existing.get("employee_number", ""),
+                meta={k: v for k, v in updates.items() if k != "photo"})
+    return {"ok": True}
+
+
+@api.delete("/admin/birthdays/{birthday_id}")
+async def admin_delete_birthday(birthday_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(birthday_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    existing = await db.birthdays.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Birthday not found")
+    await db.birthdays.delete_one({"_id": oid})
+    await audit(admin, "birthday.delete", target=existing.get("employee_number", ""))
+    return {"ok": True}
 
 
 class AdminBookingIn(BaseModel):
@@ -2144,6 +2298,12 @@ async def startup():
     await db.holidays.create_index("date", unique=True)
     try:
         await db.sunday_overrides.create_index("date", unique=True)
+    except Exception:
+        pass
+    try:
+        await db.birthdays.create_index("mmdd")
+        await db.birthdays.create_index("user_id", unique=True)
+        await db.special_days.create_index("mmdd", unique=True)
     except Exception:
         pass
     await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)

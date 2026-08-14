@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import client, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import BirthdayModal from "@/components/BirthdayModal";
 import TopBar from "@/components/TopBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -283,6 +284,7 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="min-h-screen bg-background warm-grain">
+      <BirthdayModal user={user} />
       <TopBar />
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-10 lg:py-14" data-testid="employee-dashboard">
         <div className="mb-10">
