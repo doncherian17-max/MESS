@@ -19,6 +19,7 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - Sunday default = Mess Off; per-meal override (breakfast/dinner/both) via admin
 
 ## Latest features
+- [x] **Special Day Greeting Popup** — Employee dashboard now pops a festive modal on login when the day is a configured special day (Independence Day, Republic Day, Gandhi Jayanti, etc.) with themed gradient + emoji confetti. Also wired the previously-orphaned greeting banner. Once-per-day via sessionStorage. (Feb 2026)
 - [x] **Birthday Cheer Sound** — Birthday modal plays a synthesized ~3s cheer chime on open (Web Audio API, no external asset). Mute toggle (Volume2/VolumeX icon top-left) persists in localStorage (Feb 2026)
 - [x] **Admin Birthday Editor** — Admin → Employees tab now has a Birthdays card with search, month filter, Today-only toggle, Add/Edit/Delete, photo upload with auto-resize to 512×512 JPEG (Pillow, backend), admin comment, and live preview card (Feb 2026)
 - [x] SUPER MILER brand rename everywhere

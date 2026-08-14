@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import client, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import BirthdayModal from "@/components/BirthdayModal";
+import GreetingModal from "@/components/GreetingModal";
 import TopBar from "@/components/TopBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -195,16 +196,18 @@ export default function EmployeeDashboard() {
   const load = async () => {
     setLoading(true);
     try {
-      const [s, m, h, c] = await Promise.all([
+      const [s, m, h, c, g] = await Promise.all([
         client.get("/bookings/status"),
         client.get("/bookings/mine"),
         client.get("/holidays"),
         client.get(`/bookings/cancellations?month=${month}`),
+        client.get("/greetings/today").catch(() => ({ data: null })),
       ]);
       setStatus(s.data);
       setSummary(m.data);
       setHolidays(h.data);
       setCancellations(c.data.items || []);
+      setGreeting(g?.data?.greeting || null);
       // Load menu for each meal card date
       const map = {};
       await Promise.all(s.data.items.map(async (it) => {
@@ -284,6 +287,7 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="min-h-screen bg-background warm-grain">
+      <GreetingModal />
       <BirthdayModal user={user} />
       <TopBar />
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-10 lg:py-14" data-testid="employee-dashboard">
