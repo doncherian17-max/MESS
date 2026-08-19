@@ -154,7 +154,7 @@ export default function ChefDashboard() {
         </div>
         {lastRefreshed && (
           <div className="text-xs text-muted-foreground mb-6 font-mono-plex" data-testid="chef-last-refreshed">
-            Last updated {lastRefreshed.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+            Last updated {lastRefreshed.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: "Asia/Kolkata" })}
           </div>
         )}
 

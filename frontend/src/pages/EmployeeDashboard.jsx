@@ -21,14 +21,15 @@ import {
   AlertOctagon, ShieldAlert,
 } from "lucide-react";
 
+const IST_TZ = "Asia/Kolkata";
 function fmtDate(iso) {
   try {
     const d = new Date(iso + "T00:00:00");
-    return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: IST_TZ });
   } catch { return iso; }
 }
 function fmtDateTime(iso) {
-  try { return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); }
+  try { return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: IST_TZ }); }
   catch { return iso; }
 }
 
