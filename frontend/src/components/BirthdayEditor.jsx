@@ -3,6 +3,7 @@ import client, { formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -16,7 +17,7 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
-  Cake, Pencil, Trash2, Plus, Search, Upload, Loader2, PartyPopper,
+  Cake, Pencil, Trash2, Plus, Search, Upload, Loader2, PartyPopper, MessageSquare, UserPlus, UserCheck,
 } from "lucide-react";
 
 const RED = "#e11d48";
@@ -45,7 +46,7 @@ function InitialAvatar({ name, size = 40 }) {
   );
 }
 
-export default function BirthdayEditor({ employees = [] }) {
+export default function BirthdayEditor({ employees = [], onEmployeeCreated }) {
   const [birthdays, setBirthdays] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -55,7 +56,11 @@ export default function BirthdayEditor({ employees = [] }) {
   // Add/Edit dialog
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ user_id: "", month: "", day: "" });
+  const [mode, setMode] = useState("existing"); // "existing" | "new"
+  const [form, setForm] = useState({
+    user_id: "", month: "", day: "", comment: "",
+    new_emp_number: "", new_emp_name: "",
+  });
   const [busy, setBusy] = useState(false);
   const [empSearch, setEmpSearch] = useState("");
 
@@ -94,16 +99,27 @@ export default function BirthdayEditor({ employees = [] }) {
     [birthdays]
   );
 
+  const resetForm = () => setForm({
+    user_id: "", month: "", day: "", comment: "",
+    new_emp_number: "", new_emp_name: "",
+  });
+
   const openAdd = () => {
     setEditing(null);
-    setForm({ user_id: "", month: "", day: "" });
+    setMode("existing");
+    resetForm();
     setEmpSearch("");
     setOpen(true);
   };
   const openEdit = (b) => {
     setEditing(b);
+    setMode("existing");
     const [m, d] = (b.mmdd || "").split("-");
-    setForm({ user_id: b.user_id || "", month: m || "", day: d || "" });
+    setForm({
+      user_id: b.user_id || "", month: m || "", day: d || "",
+      comment: b.comment || "",
+      new_emp_number: "", new_emp_name: "",
+    });
     setEmpSearch("");
     setOpen(true);
   };
@@ -112,14 +128,25 @@ export default function BirthdayEditor({ employees = [] }) {
     e.preventDefault();
     const mmdd = `${form.month}-${form.day}`;
     if (!/^\d{2}-\d{2}$/.test(mmdd)) { toast.error("Pick a valid date"); return; }
-    if (!editing && !form.user_id) { toast.error("Choose an employee"); return; }
     setBusy(true);
     try {
       if (editing) {
-        await client.patch(`/admin/birthdays/${editing.id}`, { mmdd });
+        await client.patch(`/admin/birthdays/${editing.id}`, { mmdd, comment: form.comment });
         toast.success("Birthday updated");
+      } else if (mode === "new") {
+        const emp = form.new_emp_number.trim();
+        const name = form.new_emp_name.trim();
+        if (!emp || !name) { toast.error("Employee ID and Name are required"); setBusy(false); return; }
+        // Create employee (password = employee number by default)
+        const { data: user } = await client.post("/admin/employees", {
+          employee_number: emp, name, password: emp, role: "employee",
+        });
+        await client.post("/admin/birthdays", { user_id: user.id, mmdd, comment: form.comment || null });
+        toast.success(`Created ${name} and added birthday`);
+        if (onEmployeeCreated) onEmployeeCreated();
       } else {
-        await client.post("/admin/birthdays", { user_id: form.user_id, mmdd });
+        if (!form.user_id) { toast.error("Choose an employee"); setBusy(false); return; }
+        await client.post("/admin/birthdays", { user_id: form.user_id, mmdd, comment: form.comment || null });
         toast.success("Birthday added");
       }
       setOpen(false);
@@ -155,6 +182,7 @@ export default function BirthdayEditor({ employees = [] }) {
       });
       setImportResult(data);
       toast.success(`Imported: ${data.birthdays_added} added, ${data.birthdays_updated} updated`);
+      if (onEmployeeCreated && data.created_users > 0) onEmployeeCreated();
       await load();
     } catch (err) { toast.error(formatApiError(err)); }
     finally {
@@ -163,13 +191,14 @@ export default function BirthdayEditor({ employees = [] }) {
     }
   };
 
-  const availableEmployees = useMemo(() => {
+  // Show ALL employees (with a "has birthday" hint) so admin can re-target any employee.
+  const employeeChoices = useMemo(() => {
     const used = new Set(birthdays.map((b) => b.user_id));
     const q = empSearch.trim().toLowerCase();
     return employees
-      .filter((e) => !used.has(e.id))
       .filter((e) => !q || e.name?.toLowerCase().includes(q) || e.employee_number?.toLowerCase().includes(q))
-      .slice(0, 100);
+      .slice(0, 150)
+      .map((e) => ({ ...e, hasBirthday: used.has(e.id) }));
   }, [employees, birthdays, empSearch]);
 
   return (
@@ -199,9 +228,8 @@ export default function BirthdayEditor({ employees = [] }) {
         </div>
       </div>
       <p className="text-sm text-muted-foreground mb-6">
-        Import from Excel with columns <span className="font-mono-plex">Employee ID</span>,
-        <span className="font-mono-plex"> Name</span>, and <span className="font-mono-plex">Birthday</span>.
-        Missing employees are auto-created (password defaults to Employee ID).
+        Import from Excel (<span className="font-mono-plex">Employee ID, Name, Birthday</span>) or add manually.
+        You can also register a brand-new employee right from the Add dialog.
       </p>
 
       <div className="flex items-center gap-3 flex-wrap mb-4">
@@ -234,16 +262,17 @@ export default function BirthdayEditor({ employees = [] }) {
               <TableHead className="py-3 w-16"></TableHead>
               <TableHead>Employee</TableHead>
               <TableHead className="w-28">Birthday</TableHead>
+              <TableHead>Comment</TableHead>
               <TableHead className="text-right w-32">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+              <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Loading…
               </TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground"
+              <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground"
                 data-testid="birthdays-empty">
                 No birthdays match your filter.
               </TableCell></TableRow>
@@ -263,6 +292,10 @@ export default function BirthdayEditor({ employees = [] }) {
                     <Badge className="ml-2 rounded-full text-[10px]"
                       style={{ backgroundColor: RED, color: "white" }}>Today</Badge>
                   )}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-xs truncate"
+                  data-testid={`birthday-comment-${b.employee_number}`}>
+                  {b.comment || <span className="italic opacity-50">—</span>}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="inline-flex items-center gap-1">
@@ -285,39 +318,87 @@ export default function BirthdayEditor({ employees = [] }) {
 
       {/* Add / Edit dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md" data-testid="birthday-editor-dialog">
+        <DialogContent className="max-w-lg" data-testid="birthday-editor-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Cake className="h-5 w-5" style={{ color: RED }} />
               {editing ? `Edit birthday · ${editing.name}` : "Add birthday"}
             </DialogTitle>
             <DialogDescription>
-              {editing ? "Update the date of birth." : "Pick an employee and their date of birth."}
+              {editing
+                ? "Update the date of birth and admin comment."
+                : "Pick an existing employee, or register a new one on the fly."}
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={submit} className="space-y-4">
             {!editing && (
+              <div className="flex items-center gap-2 rounded-full border border-border p-1 bg-muted/40 w-fit">
+                <button type="button" onClick={() => setMode("existing")}
+                  className={`h-8 rounded-full px-4 text-sm gap-2 inline-flex items-center transition ${mode === "existing" ? "bg-white shadow font-semibold" : "text-muted-foreground"}`}
+                  data-testid="birthday-mode-existing">
+                  <UserCheck className="h-4 w-4" /> Existing employee
+                </button>
+                <button type="button" onClick={() => setMode("new")}
+                  className={`h-8 rounded-full px-4 text-sm gap-2 inline-flex items-center transition ${mode === "new" ? "bg-white shadow font-semibold" : "text-muted-foreground"}`}
+                  data-testid="birthday-mode-new">
+                  <UserPlus className="h-4 w-4" /> New employee
+                </button>
+              </div>
+            )}
+
+            {!editing && mode === "existing" && (
               <div className="space-y-2">
                 <Label className="overline">Employee</Label>
                 <Input placeholder="Search employee..." value={empSearch}
                   onChange={(e) => setEmpSearch(e.target.value)}
                   className="h-10" data-testid="birthday-employee-search" />
                 <div className="max-h-40 overflow-y-auto rounded-lg border border-border">
-                  {availableEmployees.length === 0 ? (
+                  {employeeChoices.length === 0 ? (
                     <div className="p-3 text-sm text-muted-foreground">
-                      {employees.length === 0 ? "No employees" : "No matches / all have birthdays set"}
+                      {employees.length === 0 ? "No employees" : "No matches"}
                     </div>
-                  ) : availableEmployees.map((e) => (
+                  ) : employeeChoices.map((e) => (
                     <button type="button" key={e.id}
                       onClick={() => setForm((p) => ({ ...p, user_id: e.id }))}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-muted transition ${form.user_id === e.id ? "bg-primary/10 font-semibold" : ""}`}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-muted transition flex items-center justify-between ${form.user_id === e.id ? "bg-primary/10 font-semibold" : ""}`}
                       data-testid={`birthday-emp-option-${e.employee_number}`}>
-                      <span className="font-mono-plex text-xs mr-2 opacity-70">{e.employee_number}</span>
-                      {e.name}
+                      <span>
+                        <span className="font-mono-plex text-xs mr-2 opacity-70">{e.employee_number}</span>
+                        {e.name}
+                      </span>
+                      {e.hasBirthday && (
+                        <Badge variant="outline" className="rounded-full text-[10px] ml-2">has DOB</Badge>
+                      )}
                     </button>
                   ))}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Selecting an employee who already has a DOB will overwrite it.
+                </p>
+              </div>
+            )}
+
+            {!editing && mode === "new" && (
+              <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label className="overline">Employee ID</Label>
+                    <Input value={form.new_emp_number}
+                      onChange={(e) => setForm((p) => ({ ...p, new_emp_number: e.target.value }))}
+                      placeholder="e.g. 655555" className="h-10 font-mono-plex"
+                      data-testid="birthday-new-emp-id" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="overline">Name</Label>
+                    <Input value={form.new_emp_name}
+                      onChange={(e) => setForm((p) => ({ ...p, new_emp_name: e.target.value }))}
+                      placeholder="Full name" className="h-10" data-testid="birthday-new-emp-name" />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  A new employee account will be created. Default password = Employee ID.
+                </p>
               </div>
             )}
 
@@ -352,12 +433,26 @@ export default function BirthdayEditor({ employees = [] }) {
               </div>
             </div>
 
+            <div className="space-y-2">
+              <Label className="overline flex items-center gap-1.5">
+                <MessageSquare className="h-3 w-3" /> Admin comment (optional)
+              </Label>
+              <Textarea rows={3} value={form.comment}
+                onChange={(e) => setForm((p) => ({ ...p, comment: e.target.value }))}
+                placeholder="Personal note that will appear on the celebration card…"
+                maxLength={280}
+                data-testid="birthday-comment-input" />
+              <div className="text-xs text-muted-foreground text-right">{form.comment.length}/280</div>
+            </div>
+
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
               <Button type="submit"
-                disabled={busy || (!editing && !form.user_id) || !form.month || !form.day}
+                disabled={busy || !form.month || !form.day
+                  || (!editing && mode === "existing" && !form.user_id)
+                  || (!editing && mode === "new" && (!form.new_emp_number.trim() || !form.new_emp_name.trim()))}
                 data-testid="birthday-submit-button" className="rounded-full">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : (editing ? "Save changes" : "Add birthday")}
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : (editing ? "Save changes" : (mode === "new" ? "Create & add" : "Add birthday"))}
               </Button>
             </DialogFooter>
           </form>

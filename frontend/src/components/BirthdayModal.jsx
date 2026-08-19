@@ -177,9 +177,95 @@ export default function BirthdayModal({ user }) {
   }, [open]);
 
   if (!birthdays.length) return null;
-  const b = birthdays[idx];
   const total = birthdays.length;
+  const b = birthdays[idx];
 
+  // Multi-birthday: grid view (2 → 2-col; 3+ → scrollable list of compact cards)
+  if (total > 1) {
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          className="max-w-2xl p-0 overflow-hidden border-0 bg-transparent shadow-none"
+          data-testid="birthday-modal"
+        >
+          <div className="relative rounded-3xl overflow-hidden" style={{
+            background: "linear-gradient(135deg, #fff7ed 0%, #fee2e2 50%, #ede9fe 100%)",
+            boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)",
+          }}>
+            <Confetti />
+
+            <button onClick={toggleMute}
+              className="absolute top-3 left-3 z-20 h-8 w-8 rounded-full flex items-center justify-center bg-white/80 hover:bg-white transition"
+              data-testid="birthday-mute-toggle"
+              aria-label={muted ? "Unmute cheer sound" : "Mute cheer sound"}
+              title={muted ? "Unmute cheer" : "Mute cheer"}>
+              {muted ? <VolumeX className="h-4 w-4" style={{ color: RED }} />
+                     : <Volume2 className="h-4 w-4" style={{ color: RED }} />}
+            </button>
+            <button onClick={() => setOpen(false)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full flex items-center justify-center bg-white/80 hover:bg-white transition"
+              data-testid="birthday-close">
+              <X className="h-4 w-4" style={{ color: RED }} />
+            </button>
+
+            <DialogHeader className="sr-only">
+              <DialogTitle>Birthday celebrations today</DialogTitle>
+            </DialogHeader>
+
+            <div className="relative z-10 p-6">
+              <div className="flex items-center justify-center gap-2 mb-1 pt-2">
+                <PartyPopper className="h-5 w-5" style={{ color: RED }} />
+                <p className="overline font-bold" style={{ color: RED }}>
+                  {total} Birthdays Today
+                </p>
+                <PartyPopper className="h-5 w-5" style={{ color: RED }} />
+              </div>
+              <h2 className="font-display text-2xl font-extrabold tracking-tight mb-4 text-center"
+                style={{ color: "#7f1d1d" }} data-testid="birthday-multi-headline">
+                🎂 Let&apos;s wish them all!
+              </h2>
+
+              <div className="max-h-[60vh] overflow-y-auto pr-1 -mr-1 space-y-3"
+                data-testid="birthday-multi-list">
+                {birthdays.map((bd) => (
+                  <div key={bd.id}
+                    className="rounded-2xl bg-white/70 backdrop-blur-sm border p-4 flex gap-4 items-start"
+                    style={{ borderColor: RED }}
+                    data-testid={`birthday-multi-card-${bd.employee_number}`}>
+                    <img src={bd.photo || DEFAULT_AVATAR(bd.name)} alt={bd.name}
+                      className="w-16 h-16 rounded-full object-cover flex-shrink-0"
+                      style={{ border: `3px solid ${RED}` }}
+                      onError={(e) => { e.target.src = DEFAULT_AVATAR(bd.name); }} />
+                    <div className="flex-1 min-w-0 text-left">
+                      <h3 className="font-display text-lg font-extrabold truncate"
+                        style={{ color: "#7f1d1d" }}>🎂 {bd.name}</h3>
+                      <p className="text-xs text-muted-foreground font-mono-plex">{bd.employee_number}</p>
+                      {bd.comment && (
+                        <div className="mt-2 rounded-lg px-3 py-1.5 bg-white/70 border text-xs italic"
+                          style={{ borderColor: RED, color: "#7f1d1d" }}>
+                          💬 {bd.comment}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-center mt-5">
+                <Button onClick={() => setOpen(false)}
+                  data-testid="birthday-close-multi"
+                  className="rounded-full text-white gap-2" style={{ backgroundColor: RED }}>
+                  Send love to all 💌
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Single birthday: full-page hero card (existing design)
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
@@ -263,7 +349,7 @@ export default function BirthdayModal({ user }) {
             )}
 
             {total > 1 && (
-              <div className="flex justify-center gap-2 mt-6">
+              <div className="flex justify-center gap-2 mt-6" data-testid="birthday-nav">
                 <Button
                   variant="outline" size="sm" onClick={() => setIdx((i) => Math.max(0, i - 1))}
                   disabled={idx === 0} data-testid="birthday-prev" className="rounded-full">

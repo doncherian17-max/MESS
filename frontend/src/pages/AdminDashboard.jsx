@@ -1011,7 +1011,7 @@ export default function AdminDashboard() {
           <TabsContent value="birthdays" className="pt-6">
             <Card className="border-border">
               <CardContent className="p-6 lg:p-8">
-                <BirthdayEditor employees={employees} />
+                <BirthdayEditor employees={employees} onEmployeeCreated={loadTop} />
               </CardContent>
             </Card>
           </TabsContent>
