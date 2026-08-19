@@ -1887,6 +1887,122 @@ async def admin_delete_birthday(birthday_id: str, admin: dict = Depends(get_admi
     return {"ok": True}
 
 
+@api.post("/admin/birthdays/bulk-import")
+async def admin_birthdays_bulk_import(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
+    """Bulk import birthdays from an Excel (.xlsx) file.
+    Columns (case-insensitive, spaces/dots/underscores ignored):
+      - Employee ID / Pers.No. / Employee Number (required)
+      - Name                                     (required — used to create the user if missing)
+      - Birthday / DOB / Date of Birth           (required — any common date format)
+    Missing employees are auto-created with the Employee ID as the default password.
+    Existing employees keep their password; their name is updated and birthday upserted.
+    """
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Please upload a .xlsx (Excel) file")
+    try:
+        from openpyxl import load_workbook
+        raw = await file.read()
+        wb = load_workbook(filename=io.BytesIO(raw), data_only=True, read_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read Excel file: {e}")
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows or len(rows) < 2:
+        raise HTTPException(status_code=400, detail="Excel is empty or missing data rows")
+
+    def norm(v):
+        return str(v or "").strip().lower().replace(" ", "").replace("_", "").replace(".", "")
+
+    header = [norm(c) for c in rows[0]]
+    def find_col(*aliases):
+        for a in aliases:
+            if a in header:
+                return header.index(a)
+        return -1
+
+    idx_emp = find_col("employeeid", "employeenumber", "persno", "id", "empid")
+    idx_name = find_col("name", "employeename", "empname")
+    idx_dob = find_col("birthday", "dateofbirth", "dob", "birthdate")
+    if idx_emp < 0 or idx_name < 0 or idx_dob < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Excel must have columns: Employee ID, Name, Birthday"
+        )
+
+    def parse_dob_mmdd(v):
+        if v is None or v == "":
+            return None
+        if hasattr(v, "month") and hasattr(v, "day"):
+            return f"{v.month:02d}-{v.day:02d}"
+        s = str(v).strip()
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y",
+                    "%m/%d/%Y", "%m-%d-%Y", "%d %b %Y", "%d %B %Y",
+                    "%d/%m", "%d-%m", "%m-%d"):
+            try:
+                d = datetime.strptime(s, fmt)
+                return f"{d.month:02d}-{d.day:02d}"
+            except Exception:
+                continue
+        return None
+
+    created_users = birthdays_added = birthdays_updated = 0
+    errors: list = []
+    for i, row in enumerate(rows[1:], start=2):
+        raw_emp = row[idx_emp]
+        emp = ""
+        if raw_emp is not None:
+            emp = str(raw_emp).strip()
+            if emp.endswith(".0"):
+                emp = emp[:-2]
+        name = str(row[idx_name] or "").strip()
+        dob_mmdd = parse_dob_mmdd(row[idx_dob])
+
+        if not emp and not name:
+            continue
+        if not emp or not name:
+            errors.append({"line": i, "error": "Employee ID and Name are required"})
+            continue
+        if not dob_mmdd:
+            errors.append({"line": i, "error": f"Invalid or missing Birthday for {emp}"})
+            continue
+
+        existing_user = await db.users.find_one({"employee_number": emp})
+        if existing_user:
+            if existing_user.get("name") != name:
+                await db.users.update_one({"_id": existing_user["_id"]},
+                                          {"$set": {"name": name, "updated_at": now_local().isoformat()}})
+            user_id = str(existing_user["_id"])
+        else:
+            insert_doc = {
+                "employee_number": emp, "name": name, "email": None,
+                "password_hash": hash_password(emp), "role": "employee",
+                "created_at": now_local().isoformat(),
+            }
+            r = await db.users.insert_one(insert_doc)
+            user_id = str(r.inserted_id)
+            created_users += 1
+
+        existing_b = await db.birthdays.find_one({"user_id": user_id})
+        set_doc = {"user_id": user_id, "employee_number": emp, "name": name,
+                   "mmdd": dob_mmdd, "updated_at": now_local().isoformat()}
+        await db.birthdays.update_one(
+            {"user_id": user_id},
+            {"$set": set_doc, "$setOnInsert": {"created_at": now_local().isoformat()}},
+            upsert=True,
+        )
+        if existing_b:
+            birthdays_updated += 1
+        else:
+            birthdays_added += 1
+
+    await audit(admin, "birthday.bulk_import",
+                meta={"created_users": created_users, "birthdays_added": birthdays_added,
+                      "birthdays_updated": birthdays_updated, "errors": len(errors)})
+    return {"created_users": created_users, "birthdays_added": birthdays_added,
+            "birthdays_updated": birthdays_updated, "errors": errors}
+
+
 class DayCancelIn(BaseModel):
     date: str
     meal_type: Literal["breakfast", "dinner", "both"] = "both"
@@ -2283,6 +2399,20 @@ async def root():
 
 
 # ---------------- Greetings (special days) ----------------
+class SpecialDayIn(BaseModel):
+    mmdd: str = Field(pattern=r"^\d{2}-\d{2}$")
+    name: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=500)
+    emoji: str = Field(default="🎊", max_length=8)
+
+
+class SpecialDayPatchIn(BaseModel):
+    mmdd: Optional[str] = Field(default=None, pattern=r"^\d{2}-\d{2}$")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    message: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    emoji: Optional[str] = Field(default=None, max_length=8)
+
+
 DEFAULT_SPECIAL_DAYS = [
     {"mmdd": "01-01", "name": "New Year", "message": "Happy New Year! May your year be full of good food and great memories.", "emoji": "🎉"},
     {"mmdd": "01-14", "name": "Makar Sankranti / Pongal", "message": "Wishing you a joyful Makar Sankranti — sweet ties, sweeter days ahead.", "emoji": "🌾"},
@@ -2318,6 +2448,76 @@ async def greetings_today(user: dict = Depends(get_current_user)):
             "emoji": doc.get("emoji", "🎊"),
         },
     }
+
+
+@api.get("/admin/special-days")
+async def admin_list_special_days(admin: dict = Depends(get_admin_user)):
+    out = []
+    async for d in db.special_days.find({}).sort("mmdd", 1):
+        out.append({
+            "id": str(d["_id"]),
+            "mmdd": d.get("mmdd", ""),
+            "name": d.get("name", ""),
+            "message": d.get("message", ""),
+            "emoji": d.get("emoji", "🎊"),
+        })
+    return out
+
+
+@api.post("/admin/special-days")
+async def admin_create_special_day(body: SpecialDayIn, admin: dict = Depends(get_admin_user)):
+    existing = await db.special_days.find_one({"mmdd": body.mmdd})
+    if existing:
+        raise HTTPException(status_code=400, detail=f"A special day already exists on {body.mmdd} — edit it instead.")
+    doc = {
+        "mmdd": body.mmdd, "name": body.name.strip(),
+        "message": body.message.strip(), "emoji": body.emoji or "🎊",
+        "created_at": now_local().isoformat(),
+    }
+    res = await db.special_days.insert_one(doc)
+    await audit(admin, "special_day.create", target=body.mmdd, meta={"name": body.name})
+    return {"id": str(res.inserted_id), "mmdd": doc["mmdd"], "name": doc["name"],
+            "message": doc["message"], "emoji": doc["emoji"]}
+
+
+@api.patch("/admin/special-days/{sd_id}")
+async def admin_update_special_day(sd_id: str, body: SpecialDayPatchIn, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(sd_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    existing = await db.special_days.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Special day not found")
+    updates: dict = {}
+    if body.mmdd is not None:
+        clash = await db.special_days.find_one({"mmdd": body.mmdd, "_id": {"$ne": oid}})
+        if clash:
+            raise HTTPException(status_code=400, detail=f"Another special day is already on {body.mmdd}")
+        updates["mmdd"] = body.mmdd
+    if body.name is not None: updates["name"] = body.name.strip()
+    if body.message is not None: updates["message"] = body.message.strip()
+    if body.emoji is not None: updates["emoji"] = body.emoji or "🎊"
+    if updates:
+        updates["updated_at"] = now_local().isoformat()
+        await db.special_days.update_one({"_id": oid}, {"$set": updates})
+        await audit(admin, "special_day.update", target=existing.get("mmdd", ""), meta=updates)
+    return {"ok": True}
+
+
+@api.delete("/admin/special-days/{sd_id}")
+async def admin_delete_special_day(sd_id: str, admin: dict = Depends(get_admin_user)):
+    try:
+        oid = ObjectId(sd_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid id")
+    existing = await db.special_days.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Special day not found")
+    await db.special_days.delete_one({"_id": oid})
+    await audit(admin, "special_day.delete", target=existing.get("mmdd", ""),
+                meta={"name": existing.get("name", "")})
+    return {"ok": True}
 
 
 # ---------------- Startup ----------------

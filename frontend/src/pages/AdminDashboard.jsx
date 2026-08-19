@@ -20,6 +20,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import AdminBookingsTab from "@/components/AdminBookingsTab";
 import EmergencyCancellationsTab from "@/components/EmergencyCancellationsTab";
 import BirthdayEditor from "@/components/BirthdayEditor";
+import SpecialDaysEditor from "@/components/SpecialDaysEditor";
+import { Cake, Sparkles } from "lucide-react";
 import PasswordInput from "@/components/PasswordInput";
 import { toast } from "sonner";
 import {
@@ -580,6 +582,8 @@ export default function AdminDashboard() {
             <TabsTrigger value="bookings" data-testid="tab-bookings" className="gap-1.5"><Settings2 className="h-3.5 w-3.5" /> Bookings</TabsTrigger>
             <TabsTrigger value="emergency" data-testid="tab-emergency" className="gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> Emergency</TabsTrigger>
             <TabsTrigger value="employees" data-testid="tab-employees" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Employees</TabsTrigger>
+            <TabsTrigger value="birthdays" data-testid="tab-birthdays" className="gap-1.5"><Cake className="h-3.5 w-3.5" /> Birthdays</TabsTrigger>
+            <TabsTrigger value="special-days" data-testid="tab-special-days" className="gap-1.5"><Sparkles className="h-3.5 w-3.5" /> Special days</TabsTrigger>
             <TabsTrigger value="holidays" data-testid="tab-holidays" className="gap-1.5"><PartyPopper className="h-3.5 w-3.5" /> Holidays</TabsTrigger>
             <TabsTrigger value="menu" data-testid="tab-menu" className="gap-1.5"><ChefHat className="h-3.5 w-3.5" /> Menu</TabsTrigger>
             <TabsTrigger value="audit" data-testid="tab-audit" className="gap-1.5"><ScrollText className="h-3.5 w-3.5" /> Audit</TabsTrigger>
@@ -999,7 +1003,24 @@ export default function AdminDashboard() {
                     </TableBody>
                   </Table>
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Birthdays */}
+          <TabsContent value="birthdays" className="pt-6">
+            <Card className="border-border">
+              <CardContent className="p-6 lg:p-8">
                 <BirthdayEditor employees={employees} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Special days */}
+          <TabsContent value="special-days" className="pt-6">
+            <Card className="border-border">
+              <CardContent className="p-6 lg:p-8">
+                <SpecialDaysEditor />
               </CardContent>
             </Card>
           </TabsContent>
