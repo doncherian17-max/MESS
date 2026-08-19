@@ -534,6 +534,16 @@ export default function AdminDashboard() {
             <Card className="border-border card-lift"><CardContent className="p-6">
               <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5"><Sunrise className="h-3 w-3" /> Breakfast today</div>
               <div className="font-display font-extrabold text-4xl tracking-tight" data-testid="kpi-breakfast-today">{today.breakfast_today}</div>
+              {today.breakfast_slots_today && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                  <Badge variant="outline" className="rounded-full font-mono-plex" data-testid="kpi-breakfast-today-715">
+                    7:15 AM · {today.breakfast_slots_today["7:15"] || 0}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full font-mono-plex" data-testid="kpi-breakfast-today-915">
+                    9:15 AM · {today.breakfast_slots_today["9:15"] || 0}
+                  </Badge>
+                </div>
+              )}
             </CardContent></Card>
             <Card className="border-border card-lift"><CardContent className="p-6">
               <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5"><Moon className="h-3 w-3" /> Dinner today</div>
@@ -542,6 +552,16 @@ export default function AdminDashboard() {
             <Card className="border-border card-lift"><CardContent className="p-6">
               <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5"><Sunrise className="h-3 w-3" /> Breakfast tomorrow</div>
               <div className="font-display font-extrabold text-4xl tracking-tight" data-testid="kpi-breakfast-tomorrow">{today.breakfast_tomorrow}</div>
+              {today.breakfast_slots_tomorrow && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                  <Badge variant="outline" className="rounded-full font-mono-plex" data-testid="kpi-breakfast-tomorrow-715">
+                    7:15 AM · {today.breakfast_slots_tomorrow["7:15"] || 0}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full font-mono-plex" data-testid="kpi-breakfast-tomorrow-915">
+                    9:15 AM · {today.breakfast_slots_tomorrow["9:15"] || 0}
+                  </Badge>
+                </div>
+              )}
             </CardContent></Card>
             <Card className="border-border card-lift bg-accent"><CardContent className="p-6">
               <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5"><Users className="h-3 w-3" /> Employees</div>

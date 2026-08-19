@@ -182,6 +182,25 @@ export default function ChefDashboard() {
                 </div>
                 <div className="mt-4 pt-4 border-t border-border">
                   <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <Sunrise className="h-3 w-3" /> By serving time
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-lg border border-border p-3" data-testid="breakfast-slot-7-15">
+                      <div className="overline text-muted-foreground">7:15 AM</div>
+                      <div className="font-display font-extrabold text-2xl tabular-nums">
+                        {summary.breakfast.slot_7_15 ?? 0}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-border p-3" data-testid="breakfast-slot-9-15">
+                      <div className="overline text-muted-foreground">9:15 AM</div>
+                      <div className="font-display font-extrabold text-2xl tabular-nums">
+                        {summary.breakfast.slot_9_15 ?? 0}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-border">
+                  <div className="overline text-muted-foreground mb-2 flex items-center gap-1.5">
                     <UtensilsCrossed className="h-3 w-3" /> On the menu
                   </div>
                   <div className="text-sm leading-relaxed" data-testid="chef-breakfast-menu">

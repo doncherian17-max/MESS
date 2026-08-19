@@ -41,11 +41,13 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
 
   const [qty, setQty] = useState(item.quantity || 1);
   const [type, setType] = useState(item.booking_type || "dine_in");
+  const [slot, setSlot] = useState(item.breakfast_slot || "7:15");
 
   useEffect(() => {
     setQty(item.quantity || 1);
     setType(item.booking_type || "dine_in");
-  }, [item.booking_id, item.booked, item.quantity, item.booking_type]);
+    setSlot(item.breakfast_slot || "7:15");
+  }, [item.booking_id, item.booked, item.quantity, item.booking_type, item.breakfast_slot]);
 
   const holiday = item.holiday;
   const notYetOpen = !!item.not_yet_open;
@@ -122,6 +124,22 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
                 </ToggleGroupItem>
               </ToggleGroup>
             </div>
+            {isBreakfast && (
+              <div>
+                <div className="overline text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" /> Serving time
+                </div>
+                <ToggleGroup type="single" value={slot} onValueChange={(v) => v && setSlot(v)}
+                  className="justify-start" data-testid={`slot-toggle-${item.meal_type}`}>
+                  <ToggleGroupItem value="7:15" className="rounded-full px-4 gap-2 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground" data-testid={`slot-7-15-${item.meal_type}`}>
+                    <Sunrise className="h-3.5 w-3.5" /> 7:15 AM
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="9:15" className="rounded-full px-4 gap-2 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground" data-testid={`slot-9-15-${item.meal_type}`}>
+                    <Sunrise className="h-3.5 w-3.5" /> 9:15 AM
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+            )}
             <div>
               <div className="overline text-muted-foreground mb-1.5">Quantity</div>
               <div className="flex items-center gap-3">
@@ -149,8 +167,8 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
               data-testid={`cancel-${item.meal_type}-button`} className="flex-1 h-11 rounded-full">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : (item.cutoff_passed ? "Locked in" : "Cancel")}
             </Button>
-            {!item.cutoff_passed && (qty !== item.quantity || type !== item.booking_type) && (
-              <Button onClick={() => onUpdate(item, { quantity: qty, booking_type: type })}
+            {!item.cutoff_passed && (qty !== item.quantity || type !== item.booking_type || (isBreakfast && slot !== (item.breakfast_slot || "7:15"))) && (
+              <Button onClick={() => onUpdate(item, { quantity: qty, booking_type: type, ...(isBreakfast ? { breakfast_slot: slot } : {}) })}
                 disabled={busy} data-testid={`update-${item.meal_type}-button`}
                 className="flex-1 h-11 rounded-full font-semibold">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}
@@ -158,7 +176,7 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
             )}
           </div>
         ) : (
-          <Button onClick={() => onBook(item, { quantity: qty, booking_type: type })}
+          <Button onClick={() => onBook(item, { quantity: qty, booking_type: type, ...(isBreakfast ? { breakfast_slot: slot } : {}) })}
             disabled={busy || disabled} data-testid={`book-${item.meal_type}-button`}
             className="w-full h-11 rounded-full font-semibold"
             style={{ backgroundColor: `hsl(var(--meal-color))`, color: "white" }}>
@@ -167,6 +185,7 @@ function MealCard({ item, menu, onBook, onUpdate, onCancel, busy }) {
                 : holiday ? "Holiday — closed"
                 : notYetOpen ? `Opens ${fmtDateTime(item.opens_at)}`
                 : item.cutoff_passed ? "Cutoff passed"
+                : isBreakfast ? `Book ${label} (${qty}) · ${slot} AM`
                 : `Book ${label} (${qty})`
             )}
           </Button>

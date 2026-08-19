@@ -216,11 +216,13 @@ class BookingIn(BaseModel):
     meal_date: str
     quantity: int = Field(default=1, ge=1, le=MAX_QTY)
     booking_type: Literal["dine_in", "parcel"] = "dine_in"
+    breakfast_slot: Optional[Literal["7:15", "9:15"]] = None
 
 
 class BookingUpdateIn(BaseModel):
     quantity: Optional[int] = Field(default=None, ge=1, le=MAX_QTY)
     booking_type: Optional[Literal["dine_in", "parcel"]] = None
+    breakfast_slot: Optional[Literal["7:15", "9:15"]] = None
 
 
 class UpdateMeIn(BaseModel):
@@ -452,6 +454,7 @@ async def booking_status(user: dict = Depends(get_current_user)):
             "booking_id": str(existing["_id"]) if existing else None,
             "quantity": existing.get("quantity", 1) if existing else None,
             "booking_type": existing.get("booking_type", "dine_in") if existing else None,
+            "breakfast_slot": existing.get("breakfast_slot") if existing and meal_type == "breakfast" else None,
             "holiday": {"name": holiday["name"]} if holiday else None,
             "sunday_off": sunday_off,
             "cancellation": cancellation,
@@ -495,20 +498,24 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
     if existing:
         if existing.get("status") == "emergency_cancelled":
             # Revive the soft-cancelled row instead of erroring — happens after admin reopens the emergency
+            rev_updates = {
+                "status": "active",
+                "quantity": body.quantity,
+                "booking_type": body.booking_type,
+                "created_at": now.isoformat(),
+            }
+            if body.meal_type == "breakfast":
+                rev_updates["breakfast_slot"] = body.breakfast_slot or "7:15"
             await db.bookings.update_one(
                 {"_id": existing["_id"]},
-                {"$set": {
-                    "status": "active",
-                    "quantity": body.quantity,
-                    "booking_type": body.booking_type,
-                    "created_at": now.isoformat(),
-                }, "$unset": {"cancelled_at": "", "cancelled_by": ""}},
+                {"$set": rev_updates, "$unset": {"cancelled_at": "", "cancelled_by": ""}},
             )
             await audit(user, "booking.rebook_after_reopen", target=str(existing["_id"]),
                         meta={"meal_type": body.meal_type, "meal_date": body.meal_date,
                               "qty": body.quantity, "type": body.booking_type})
             return {"id": str(existing["_id"]), "meal_type": body.meal_type, "meal_date": body.meal_date,
-                    "quantity": body.quantity, "booking_type": body.booking_type}
+                    "quantity": body.quantity, "booking_type": body.booking_type,
+                    "breakfast_slot": rev_updates.get("breakfast_slot")}
         raise HTTPException(status_code=400, detail="You have already booked this meal. You can update or cancel it.")
 
     doc = {
@@ -524,12 +531,16 @@ async def create_booking(body: BookingIn, user: dict = Depends(get_current_user)
         "served_by": None,
         "created_at": now.isoformat(),
     }
+    if body.meal_type == "breakfast":
+        doc["breakfast_slot"] = body.breakfast_slot or "7:15"
     res = await db.bookings.insert_one(doc)
     await audit(user, "booking.create", target=str(res.inserted_id), meta={
         "meal_type": body.meal_type, "meal_date": body.meal_date, "qty": body.quantity, "type": body.booking_type,
+        "slot": doc.get("breakfast_slot"),
     })
     return {"id": str(res.inserted_id), "meal_type": body.meal_type, "meal_date": body.meal_date,
-            "quantity": body.quantity, "booking_type": body.booking_type}
+            "quantity": body.quantity, "booking_type": body.booking_type,
+            "breakfast_slot": doc.get("breakfast_slot")}
 
 
 @api.patch("/bookings/{booking_id}")
@@ -555,6 +566,8 @@ async def update_booking(booking_id: str, body: BookingUpdateIn, user: dict = De
         updates["quantity"] = body.quantity
     if body.booking_type is not None:
         updates["booking_type"] = body.booking_type
+    if body.breakfast_slot is not None and booking["meal_type"] == "breakfast":
+        updates["breakfast_slot"] = body.breakfast_slot
     if updates:
         await db.bookings.update_one({"_id": ObjectId(booking_id)}, {"$set": updates})
         await audit(user, "booking.update", target=booking_id, meta=updates)
@@ -744,15 +757,17 @@ async def chef_summary(date: Optional[str] = None, u: dict = Depends(get_chef_or
         pipeline = [
             {"$match": {"meal_date": d, "meal_type": meal, "status": {"$ne": "emergency_cancelled"}}},
             {"$group": {
-                "_id": {"type": "$booking_type", "served": "$served"},
+                "_id": {"type": "$booking_type", "served": "$served", "slot": "$breakfast_slot"},
                 "qty": {"$sum": "$quantity"},
                 "orders": {"$sum": 1},
             }},
         ]
         parcel_qty = dine_qty = served_qty = pending_qty = total_qty = total_orders = 0
+        slot_715 = slot_915 = 0
         async for row in db.bookings.aggregate(pipeline):
             btype = row["_id"].get("type", "dine_in")
             served = row["_id"].get("served", False)
+            slot = row["_id"].get("slot")
             q = row["qty"]
             total_qty += q
             total_orders += row["orders"]
@@ -764,7 +779,12 @@ async def chef_summary(date: Optional[str] = None, u: dict = Depends(get_chef_or
                 served_qty += q
             else:
                 pending_qty += q
-        out[meal] = {
+            if meal == "breakfast":
+                if slot == "9:15":
+                    slot_915 += q
+                else:  # None or "7:15" defaults to early slot
+                    slot_715 += q
+        meal_out = {
             "total": total_qty,
             "orders": total_orders,
             "parcel": parcel_qty,
@@ -772,6 +792,10 @@ async def chef_summary(date: Optional[str] = None, u: dict = Depends(get_chef_or
             "served": served_qty,
             "pending": pending_qty,
         }
+        if meal == "breakfast":
+            meal_out["slot_7_15"] = slot_715
+            meal_out["slot_9_15"] = slot_915
+        out[meal] = meal_out
     return out
 
 
@@ -801,6 +825,7 @@ async def chef_bookings(
             "meal_date": b["meal_date"],
             "quantity": b.get("quantity", 1),
             "booking_type": b.get("booking_type", "dine_in"),
+            "breakfast_slot": b.get("breakfast_slot") if b["meal_type"] == "breakfast" else None,
             "served": b.get("served", False),
             "served_at": b.get("served_at"),
             "served_by": b.get("served_by"),
@@ -1862,14 +1887,6 @@ async def admin_delete_birthday(birthday_id: str, admin: dict = Depends(get_admi
     return {"ok": True}
 
 
-class AdminBookingIn(BaseModel):
-    user_id: str
-    meal_type: Literal["breakfast", "dinner"]
-    meal_date: str
-    quantity: int = Field(default=1, ge=1, le=MAX_QTY)
-    booking_type: Literal["dine_in", "parcel"] = "dine_in"
-
-
 class DayCancelIn(BaseModel):
     date: str
     meal_type: Literal["breakfast", "dinner", "both"] = "both"
@@ -1890,6 +1907,7 @@ class AdminBookingOverrideIn(BaseModel):
     meal_date: str
     quantity: int = Field(default=1, ge=1, le=MAX_QTY)
     booking_type: Literal["dine_in", "parcel"] = "dine_in"
+    breakfast_slot: Optional[Literal["7:15", "9:15"]] = None
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -1920,6 +1938,7 @@ async def admin_list_bookings(
             "meal_date": b["meal_date"],
             "quantity": b.get("quantity", 1),
             "booking_type": b.get("booking_type", "dine_in"),
+            "breakfast_slot": b.get("breakfast_slot") if b["meal_type"] == "breakfast" else None,
             "served": b.get("served", False),
             "created_at": b.get("created_at"),
             "admin_override": b.get("admin_override", False),
@@ -1949,16 +1968,19 @@ async def admin_create_booking(body: AdminBookingOverrideIn, background: Backgro
         "meal_date": body.meal_date,
     })
     if existing:
+        upd = {
+            "quantity": body.quantity, "booking_type": body.booking_type,
+            "status": "active",
+            "admin_override": True,
+            "override_reason": body.reason,
+            "override_by": admin["employee_number"],
+            "override_at": now_local().isoformat(),
+        }
+        if body.meal_type == "breakfast":
+            upd["breakfast_slot"] = body.breakfast_slot or existing.get("breakfast_slot") or "7:15"
         await db.bookings.update_one(
             {"_id": existing["_id"]},
-            {"$set": {
-                "quantity": body.quantity, "booking_type": body.booking_type,
-                "status": "active",
-                "admin_override": True,
-                "override_reason": body.reason,
-                "override_by": admin["employee_number"],
-                "override_at": now_local().isoformat(),
-            }},
+            {"$set": upd},
         )
         await audit(admin, "admin.booking.override_update", target=str(existing["_id"]),
                     meta={"emp": target["employee_number"], "meal": body.meal_type,
@@ -1984,6 +2006,8 @@ async def admin_create_booking(body: AdminBookingOverrideIn, background: Backgro
         "override_by": admin["employee_number"],
         "override_at": now_local().isoformat(),
     }
+    if body.meal_type == "breakfast":
+        doc["breakfast_slot"] = body.breakfast_slot or "7:15"
     res = await db.bookings.insert_one(doc)
     await audit(admin, "admin.booking.override_create", target=str(res.inserted_id),
                 meta={"admin_name": admin.get("name", ""), "employee_number": target["employee_number"],
@@ -2225,36 +2249,21 @@ async def admin_today(admin: dict = Depends(get_admin_user)):
             return r.get("q", 0)
         return 0
 
-    return {
-        "today": today,
-        "tomorrow": tomorrow,
-        "breakfast_today": await sum_qty({"meal_type": "breakfast", "meal_date": today}),
-        "dinner_today": await sum_qty({"meal_type": "dinner", "meal_date": today}),
-        "breakfast_tomorrow": await sum_qty({"meal_type": "breakfast", "meal_date": tomorrow}),
-        "total_employees": await db.users.count_documents({"role": {"$in": ["employee", "chef"]}}),
-    }
-
-
-@api.get("/")
-async def root():
-    return {"service": "MessBook API", "ok": True}
-
-
-    return {"ok": True, "affected_users": len(per_user)}
-
-
-@api.get("/admin/today")
-async def admin_today(admin: dict = Depends(get_admin_user)):
-    now = now_local()
-    today = now.date().isoformat()
-    tomorrow = (now.date() + timedelta(days=1)).isoformat()
-
-    async def sum_qty(match: dict) -> int:
-        match_active = {**match, "status": {"$ne": "emergency_cancelled"}}
-        cur = db.bookings.aggregate([{"$match": match_active}, {"$group": {"_id": None, "q": {"$sum": "$quantity"}}}])
+    async def breakfast_slots(meal_date: str) -> dict:
+        cur = db.bookings.aggregate([
+            {"$match": {"meal_type": "breakfast", "meal_date": meal_date,
+                        "status": {"$ne": "emergency_cancelled"}}},
+            {"$group": {"_id": "$breakfast_slot", "q": {"$sum": "$quantity"}}},
+        ])
+        slot_715 = slot_915 = 0
         async for r in cur:
-            return r.get("q", 0)
-        return 0
+            slot = r.get("_id")
+            q = r.get("q", 0)
+            if slot == "9:15":
+                slot_915 += q
+            else:
+                slot_715 += q
+        return {"7:15": slot_715, "9:15": slot_915}
 
     return {
         "today": today,
@@ -2262,6 +2271,8 @@ async def admin_today(admin: dict = Depends(get_admin_user)):
         "breakfast_today": await sum_qty({"meal_type": "breakfast", "meal_date": today}),
         "dinner_today": await sum_qty({"meal_type": "dinner", "meal_date": today}),
         "breakfast_tomorrow": await sum_qty({"meal_type": "breakfast", "meal_date": tomorrow}),
+        "breakfast_slots_today": await breakfast_slots(today),
+        "breakfast_slots_tomorrow": await breakfast_slots(tomorrow),
         "total_employees": await db.users.count_documents({"role": {"$in": ["employee", "chef"]}}),
     }
 

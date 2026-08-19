@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 11 validates the new breakfast serving-time slot feature (7:15 / 9:15) end-to-end. Backend: 13/13 pytest tests pass in /app/backend/tests/test_iteration11_breakfast_slots.py covering POST /api/bookings (default 7:15, explicit 9:15, invalid 8:00 -> 422, dinner ignores slot), PATCH /api/bookings/{id} (breakfast slot flip persists, dinner slot ignored), GET /api/bookings/status (breakfast_slot field present, null for dinner), GET /api/admin/today (breakfast_slots_today/tomorrow with {7:15,9:15} + legacy total = slot sum), GET /api/chef/summary (slot_7_15, slot_9_15 for breakfast; absent on dinner), GET /api/chef/bookings & /api/admin/bookings (breakfast_slot on each item; null for dinner), POST /api/admin/bookings override (accepts slot for breakfast, ignored for dinner), and legacy-backfill (bookings created without slot count in 7:15 bucket). Frontend Playwright: employee login shows SERVING TIME toggle on breakfast card only, dinner has no toggle; default 7:15 selected, book button label reads 'Book Breakfast (1) · 7:15 AM'; toggling to 9:15 updates label to '· 9:15 AM'. Admin dashboard KPI cards render both 'Breakfast today' and 'Breakfast tomorrow' with two badges each (data-testid kpi-breakfast-today-715/915 and kpi-breakfast-tomorrow-715/915) showing '7:15 AM · 0' and '9:15 AM · 0'. Chef dashboard breakfast card renders 'BY SERVING TIME' section with data-testid breakfast-slot-7-15 and breakfast-slot-9-15 boxes; dinner card has no serving-time section.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/today", "issue": "server.py has a DUPLICATE @api.get('/admin/today') handler at ~line 2296 (old shape without breakfast_slots_today/tomorrow). FastAPI uses the first-registered route so the correct handler wins, but this is dead code that shadows nothing useful — if someone reorders imports/definitions it could silently regress. Also there is unreachable code at line 2293 (a stray 'return {...}' after admin_today's return). Recommend deleting lines ~2293-2316."},
+      {"endpoint": "POST /api/admin/bookings", "issue": "AdminBookingIn model (line ~1890) still lacks breakfast_slot even though the actual override endpoint uses AdminBookingOverrideIn. AdminBookingIn appears to be dead code — either remove it or keep in sync."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_breakfast_slots.py",
+    "/app/test_reports/pytest/iteration11.xml"
+  ],
+  "action_items": [
+    "(Cleanup, non-blocking) Delete the duplicate /admin/today handler and stray return statement at server.py ~lines 2293-2316.",
+    "(Cleanup, non-blocking) Remove or update the unused AdminBookingIn model (server.py ~line 1890) to align with AdminBookingOverrideIn."
+  ],
+  "critical_code_review_comments": [
+    "server.py now ~2432 lines — split urged (routers per domain). Duplicate /admin/today endpoint is a symptom of monolithic file drift.",
+    "Breakfast-slot aggregation in admin_today.breakfast_slots and chef_summary correctly treats missing/None slot as 7:15 for legacy backward compatibility — verified via test.",
+    "create_booking (line ~534), update_booking (~569), admin_create_booking (~1987/2017) all correctly gate breakfast_slot writes with `if meal_type == 'breakfast'` — dinner docs never receive the field. Confirmed via API round-trip.",
+    "EmployeeDashboard.jsx MealCard: Save-changes detection at line 170 correctly compares `slot !== (item.breakfast_slot || '7:15')` so legacy bookings without slot don't spuriously show the Save button — good backward-compat handling.",
+    "AdminDashboard KPI badges use font-mono-plex — visually consistent with rest of admin KPIs. Values render even when 0 (no conditional hiding), which is the correct UX."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_breakfast_slots.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin 135791/admin@123, Employee 16272/test1234 (both from /app/memory/test_credentials.md).",
+  "seed_data_creation": "All test bookings are cleaned up via admin DELETE /api/admin/bookings/{id} in per-test finally blocks. Verified DB clean at end of run (admin/today shows 0 across all buckets).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test file is pytest-xdist safe when using loadscope BUT breakfast POSTs by the same employee on the same date cannot run in parallel (unique-per-day constraint). If adding more tests, keep them in TestBreakfastSlot or use unique meal_dates. Server date at test time was 2026-08-19 IST — breakfast is bookable only for TOMORROW (window opens 4:30 AM prev day), dinner is bookable for TODAY (window ~1:30 PM–9:30 AM next day). To bypass cutoff timing, use POST /api/admin/bookings (override) which skips window/cutoff checks. Legacy bookings without breakfast_slot correctly aggregate into 7:15 bucket in both admin/today and chef/summary.",
+  "rca of the issue": "N/A — no functional bugs. Two dead-code items flagged (duplicate /admin/today handler, unused AdminBookingIn) as cleanup only; they do not affect behavior because FastAPI first-registered-route-wins."
+}

@@ -19,6 +19,7 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - Sunday default = Mess Off; per-meal override (breakfast/dinner/both) via admin
 
 ## Latest features
+- [x] **Breakfast Serving-Time Slots** — Employees can pick 7:15 AM or 9:15 AM when booking breakfast. Slot is stored on the booking, editable via PATCH, and aggregated in `/api/admin/today` (`breakfast_slots_today` / `_tomorrow`) and `/api/chef/summary` (`slot_7_15` / `slot_9_15`). Admin KPI cards and Chef breakfast card show per-slot counts. Dinner unchanged. Legacy breakfast bookings without a slot count into 7:15 for backward compat. (Feb 2026)
 - [x] **Special Day Greeting Popup** — Employee dashboard now pops a festive modal on login when the day is a configured special day (Independence Day, Republic Day, Gandhi Jayanti, etc.) with themed gradient + emoji confetti. Also wired the previously-orphaned greeting banner. Once-per-day via sessionStorage. (Feb 2026)
 - [x] **Birthday Cheer Sound** — Birthday modal plays a synthesized ~3s cheer chime on open (Web Audio API, no external asset). Mute toggle (Volume2/VolumeX icon top-left) persists in localStorage (Feb 2026)
 - [x] **Admin Birthday Editor** — Admin → Employees tab now has a Birthdays card with search, month filter, Today-only toggle, Add/Edit/Delete, photo upload with auto-resize to 512×512 JPEG (Pillow, backend), admin comment, and live preview card (Feb 2026)
