@@ -1,0 +1,40 @@
+{
+  "summary": "First test of Daily Scratch & Win. Backend: 10/10 pytest pass. They were run 5 times and passed every time. Covered: disabled state (cards=[], play 400), config validation (422 on target 0, 403 for non-admin, blank reward falls back to 'WINNER'), card locked until target with play returning 400, unlock at target, non-booker gets can_scratch=false and play 403, yesterday's date returns 400 and a bad date format returns 422, 10 concurrent plays (5 users x 2 each) giving exactly 5x200 + 5x409 with at most 1 winner, repeat play 409, card stays unlocked after target is raised, every player wins when winners >= players, and admin overview/history (scratched, winners_count, name + employee_number, unlocked_at, no _id). Frontend (desktop 1920 + mobile 390): unlock toast, locked progress, scratching by dragging on the canvas reveals WINNER and opens the popup (confetti, title WINNER, reward text, close works), 'Reveal instantly' shows a lost result, a reload shows the static scratch-done result, winner names line and prizes-left badge are correct, an unbooked user sees 'Book this dinner...', booking via the UI switches the card to the canvas live, cancelling switches it back, section is hidden when disabled, admin tab shows config, day cards and history, saving config persists after reload, Save is disabled when target is empty, all 11 admin tabs click through without errors, no horizontal overflow on mobile. Regression: iteration11 and iteration13 suites pass (18/18). Booking create/cancel works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/scratch/play + DELETE /api/bookings/{id}", "issue": "Business-logic loophole: a user can book dinner, scratch (and win), then cancel the booking before cutoff and still keep the 'won' attempt. Cancelled bookings also lower the count after unlock, but the card stays unlocked. This lets people book-scratch-cancel to game the draw. Consider voiding or forfeiting the attempt on cancel, or only allowing play after the dinner cutoff."},
+      {"endpoint": "/api/admin/scratch/config", "issue": "'winners' and 'target' are global and apply immediately to the current today/tomorrow campaigns. Lowering winners after winners already exist shows e.g. '2/1'. Raising it mid-day adds new slots to today. No per-day snapshot of the config is stored in scratch_days."},
+      {"endpoint": "/api/scratch/play", "issue": "If the server fails between inserting the 'pending' attempt and updating it, the user is stuck: status shows can_scratch=true because result=None, but play returns 409. Low risk."},
+      {"endpoint": "DELETE /api/admin/employees/{id}", "issue": "Deleting an employee does not remove their scratch_attempts. This is probably fine for history, but note it."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ScratchCard 'Reveal instantly'", "issue": "If /scratch/play fails (e.g. 409/400/network), reveal() has already set revealed=true, so the canvas and button are removed. The card is left showing only the Sparkles icon with no way to retry, and onRevealed never fires, so the status never reloads. The error path should reset revealed and reload the status.", "selector": "[data-testid^=scratch-reveal-btn-]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Employee Scratch & Win", "issues": ["When winners_left is 0 the card still invites the user to scratch ('0 of 1 prizes left' plus SCRATCH HERE), which guarantees a loss. Consider showing 'All prizes claimed' instead."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration14_scratch_win.py", "/app/backend/tests/setup_scratch_ui.py", "/app/backend/tests/cleanup_scratch_test.sh", "/app/test_reports/pytest/pytest_iter14.xml"],
+  "action_items": [
+    "Decide on and handle the book-scratch-cancel loophole (forfeit or void scratch_attempt when the dinner booking is cancelled, or block cancel after scratching)",
+    "ScratchCard: on play() error after 'Reveal instantly', reset revealed and reload the status",
+    "Optional: snapshot target/winners per scratch_day when it unlocks, and show 'All prizes claimed' when winners_left == 0"
+  ],
+  "critical_code_review_comments": [
+    "Winner limit is safe: the atomic find_one_and_update with winners_count $lt cfg.winners plus the unique (user_id, dinner_date) index prevents over-awarding and duplicates. Verified with concurrent requests.",
+    "Draw uses secrets.randbelow and remaining_players = bookings - played + 1, so the last eligible player is guaranteed a remaining slot. Players who never scratch can reduce the actual number of winners, which is expected.",
+    "ScratchCard renders using started.current (a ref), so the UI relies on later state changes to re-render. It works today but is fragile.",
+    "server.py is 2790+ lines and should be split into routers (scratch, birthdays, admin, bookings)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration14_scratch_win.py", "/app/backend/tests/setup_scratch_ui.py", "/app/backend/tests/cleanup_scratch_test.sh"],
+  "success_rate": {"backend": "100%", "frontend": "100% (1 low-priority edge-case bug found by code review)"},
+  "test_credentials": "Admin 135791 / admin@123 (works). Temporary TEST_SC1..6 / test@1234 (deleted).",
+  "seed_data_creation": "All test data was cleaned up: TEST_SC users, their bookings, cancellation_events, all scratch_attempts and scratch_days (none existed before testing apart from empty auto-created day docs). Scratch config reset to enabled=false, target=50, winners=3, reward=WINNER.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run tests/cleanup_scratch_test.sh, then pytest tests/test_iteration14_scratch_win.py -n0 (the module fixture creates TEST_SC users and resets config on teardown, but does not delete users, bookings or attempts, so run the cleanup script afterwards). setup_scratch_ui.py creates a UI scenario: SC1 and SC2 booked today, SC1 booked tomorrow, target 2, winners 5. Today in IST is 2026-10-19 and tomorrow's dinner window opens at 7PM, so tomorrow bookings need admin POST /api/admin/bookings."
+}

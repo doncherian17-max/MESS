@@ -19,6 +19,7 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - Sunday default = Mess Off; per-meal override (breakfast/dinner/both) via admin
 
 ## Latest features
+- [x] **Daily Scratch & Win** (2026-10-19) — User request: "Add a Daily Scratch & Win feature… Admin should be able to set daily dinner booking targets, number of winners, rewards, and toggle the feature. Employees who booked dinner get a scratch card once the target is reached." Each dinner date (today + tomorrow, IST) is its own campaign. Admin → Scratch & Win tab: enable toggle, target, winners/day, winner message (default "WINNER", no payroll effect), live day cards, history. Employee dashboard: locked progress → canvas scratch card → WINNER popup with confetti; unlock toast. Backend: `secrets` random draw (slots_left/remaining_players), atomic winner counter, unique (user_id, dinner_date) attempts → no duplicates (409). Employee cancelling a dinner after scratching forfeits the attempt (win slot freed, cannot re-scratch). Endpoints: `GET /api/scratch/status`, `POST /api/scratch/play`, `GET/PUT /api/admin/scratch/config`, `GET /api/admin/scratch/overview`, `GET /api/admin/scratch/history`. Collections: scratch_config, scratch_days, scratch_attempts. Tested iteration_14 (100%).
 - [x] **Birthdays Ergonomics** — Add-birthday dialog now supports (a) an admin comment textbox that appears on the celebration card, (b) an 'Existing / New employee' toggle so admins can register a brand-new employee (Employee ID + Name) on the fly with password = Employee ID, and (c) the Existing list now shows ALL employees with a 'has DOB' badge for those already set (selecting them overwrites). Multi-birthday celebration popup now shows ALL of today's birthdays in one scrollable grid instead of prev/next navigation. (Feb 2026)
 - [x] **Admin Custom Special Days** — New Admin → Special days tab with full CRUD (add, edit, delete) for greeting popups. Fields: MMDD, name, message, emoji picker + live preview. Endpoints: GET/POST/PATCH/DELETE `/api/admin/special-days`. Employees see the popup + banner on the matching date (Feb 2026)
 - [x] **Birthdays as a Standalone Tab** — Moved out of Employees tab into its own Admin → Birthdays top-level tab. Simplified UI (no photo). New `POST /api/admin/birthdays/bulk-import` accepts Excel with columns Employee ID, Name, Birthday; auto-creates missing employees (password = Employee ID); reports created/added/updated/errors (Feb 2026)
@@ -59,6 +60,11 @@ Publicly accessible mess meal booking web app. Employees book breakfast (10 AM �
 - `PATCH /api/admin/birthdays/{id}` — supports `{mmdd, photo, comment, clear_photo}`
 - `DELETE /api/admin/birthdays/{id}`
 - `GET /api/birthdays/today` — used by employee dashboard BirthdayModal
+
+## Backlog
+- P1: Split backend/server.py into routes/models modules
+- P2: CI smoke suite (pytest) for core endpoints
+- Scratch & Win ideas: "All prizes claimed" state when winners_left = 0; per-day config snapshot
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.

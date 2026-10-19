@@ -153,6 +153,18 @@ async def is_sunday_blocked(meal_date: str, meal_type: str) -> bool:
     return meals != "both" and meals != meal_type
 
 
+async def forfeit_scratch(booking: dict):
+    if booking.get("meal_type") != "dinner":
+        return
+    att = await db.scratch_attempts.find_one_and_update(
+        {"user_id": booking["user_id"], "dinner_date": booking["meal_date"], "status": {"$ne": "forfeited"}},
+        {"$set": {"status": "forfeited", "forfeited_at": now_local().isoformat()}},
+    )
+    if att and att.get("status") == "won":
+        await db.scratch_days.update_one(
+            {"dinner_date": booking["meal_date"], "winners_count": {"$gt": 0}}, {"$inc": {"winners_count": -1}})
+
+
 async def audit(actor: dict, action: str, target: str = "", meta: Optional[dict] = None):
     try:
         await db.audit_logs.insert_one({
@@ -593,6 +605,7 @@ async def cancel_booking(booking_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=400, detail="Cannot cancel after cutoff")
 
     await db.bookings.delete_one({"_id": ObjectId(booking_id)})
+    await forfeit_scratch(booking)
     await record_cancellation(booking, cancelled_by=user["employee_number"],
                               actor_role="employee", reason="Cancelled by employee")
     await audit(user, "booking.cancel", target=booking_id)

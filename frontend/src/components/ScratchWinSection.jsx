@@ -80,7 +80,7 @@ export default function ScratchWinSection({ refreshKey }) {
   useEffect(() => { load(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRevealed = (outcome) => {
-    if (outcome.result === "won") setWin(outcome);
+    if (outcome?.result === "won") setWin(outcome);
     setTimeout(load, 1200);
   };
 

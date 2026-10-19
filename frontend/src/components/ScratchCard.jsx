@@ -69,6 +69,8 @@ export default function ScratchCard({ card, onRevealed }) {
     } catch (e) {
       toast.error(formatApiError(e));
       started.current = false;
+      setRevealed(false);
+      onRevealed?.(null);
       if (canvasRef.current) paintCover(canvasRef.current);
     }
   };
