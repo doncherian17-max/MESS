@@ -2520,6 +2520,200 @@ async def admin_delete_special_day(sd_id: str, admin: dict = Depends(get_admin_u
     return {"ok": True}
 
 
+# ---------------- Daily Scratch & Win ----------------
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+SCRATCH_DEFAULTS = {"enabled": False, "target": 50, "winners": 3, "reward": "WINNER"}
+
+
+class ScratchConfigIn(BaseModel):
+    enabled: bool
+    target: int = Field(ge=1, le=10000)
+    winners: int = Field(ge=1, le=1000)
+    reward: str = Field(default="WINNER", max_length=120)
+
+
+class ScratchPlayIn(BaseModel):
+    dinner_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+async def get_scratch_config() -> dict:
+    doc = await db.scratch_config.find_one({"_id": "global"}) or {}
+    cfg = {k: doc.get(k, v) for k, v in SCRATCH_DEFAULTS.items()}
+    cfg["reward"] = (cfg["reward"] or "").strip() or "WINNER"
+    return cfg
+
+
+def scratch_dates() -> List[str]:
+    today = now_local().date()
+    return [today.isoformat(), (today + timedelta(days=1)).isoformat()]
+
+
+async def dinner_booking_count(dinner_date: str) -> int:
+    return await db.bookings.count_documents({
+        "meal_date": dinner_date, "meal_type": "dinner", "status": {"$ne": "emergency_cancelled"},
+    })
+
+
+async def ensure_scratch_day(dinner_date: str) -> dict:
+    try:
+        await db.scratch_days.update_one(
+            {"dinner_date": dinner_date},
+            {"$setOnInsert": {"dinner_date": dinner_date, "winners_count": 0, "unlocked_at": None}},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        pass
+    return await db.scratch_days.find_one({"dinner_date": dinner_date})
+
+
+async def scratch_day_state(dinner_date: str, cfg: dict) -> dict:
+    day = await ensure_scratch_day(dinner_date)
+    bookings = await dinner_booking_count(dinner_date)
+    unlocked_at = day.get("unlocked_at")
+    if not unlocked_at and cfg["enabled"] and bookings >= cfg["target"]:
+        unlocked_at = now_local().isoformat()
+        await db.scratch_days.update_one(
+            {"dinner_date": dinner_date, "unlocked_at": None}, {"$set": {"unlocked_at": unlocked_at}})
+        day = await db.scratch_days.find_one({"dinner_date": dinner_date})
+        unlocked_at = day.get("unlocked_at")
+    winners = []
+    async for a in db.scratch_attempts.find({"dinner_date": dinner_date, "status": "won"}).sort("scratched_at", 1):
+        winners.append({"name": a.get("name", ""), "employee_number": a.get("employee_number", ""),
+                        "scratched_at": a.get("scratched_at"), "reward": a.get("reward", "")})
+    scratched = await db.scratch_attempts.count_documents({"dinner_date": dinner_date, "status": {"$in": ["won", "lost"]}})
+    return {
+        "dinner_date": dinner_date,
+        "bookings": bookings,
+        "target": cfg["target"],
+        "max_winners": cfg["winners"],
+        "unlocked": bool(unlocked_at),
+        "unlocked_at": unlocked_at,
+        "winners_count": len(winners),
+        "winners_left": max(cfg["winners"] - len(winners), 0),
+        "scratched": scratched,
+        "winners": winners,
+    }
+
+
+@api.get("/scratch/status")
+async def scratch_status(user: dict = Depends(get_current_user)):
+    cfg = await get_scratch_config()
+    today = now_local().date().isoformat()
+    cards = []
+    if cfg["enabled"]:
+        for d in scratch_dates():
+            state = await scratch_day_state(d, cfg)
+            booked = await db.bookings.find_one({
+                "user_id": str(user["_id"]), "meal_type": "dinner", "meal_date": d,
+                "status": {"$ne": "emergency_cancelled"},
+            })
+            attempt = await db.scratch_attempts.find_one({"user_id": str(user["_id"]), "dinner_date": d})
+            result = attempt.get("status") if attempt and attempt.get("status") in ("won", "lost") else None
+            cards.append({
+                **{k: state[k] for k in ("dinner_date", "bookings", "target", "max_winners", "unlocked", "winners_left")},
+                "winners": [{"name": w["name"]} for w in state["winners"]],
+                "day_label": "Today" if d == today else "Tomorrow",
+                "booked": bool(booked),
+                "can_scratch": bool(state["unlocked"] and booked and not result),
+                "result": result,
+                "reward": attempt.get("reward") if result == "won" else None,
+            })
+    return {"enabled": cfg["enabled"], "reward": cfg["reward"], "cards": cards}
+
+
+@api.post("/scratch/play")
+async def scratch_play(body: ScratchPlayIn, user: dict = Depends(get_current_user)):
+    cfg = await get_scratch_config()
+    if not cfg["enabled"]:
+        raise HTTPException(status_code=400, detail="Scratch & Win is not active right now")
+    if body.dinner_date not in scratch_dates():
+        raise HTTPException(status_code=400, detail="This scratch card is not available")
+    uid = str(user["_id"])
+    booked = await db.bookings.find_one({
+        "user_id": uid, "meal_type": "dinner", "meal_date": body.dinner_date,
+        "status": {"$ne": "emergency_cancelled"},
+    })
+    if not booked:
+        raise HTTPException(status_code=403, detail="Book dinner for this day to get a scratch card")
+    state = await scratch_day_state(body.dinner_date, cfg)
+    if not state["unlocked"]:
+        raise HTTPException(status_code=400, detail="Booking target not reached yet")
+
+    now_iso = now_local().isoformat()
+    try:
+        res = await db.scratch_attempts.insert_one({
+            "user_id": uid, "employee_number": user["employee_number"], "name": user.get("name", ""),
+            "dinner_date": body.dinner_date, "status": "pending", "created_at": now_iso,
+        })
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="You have already scratched this card")
+
+    played = await db.scratch_attempts.count_documents({"dinner_date": body.dinner_date})
+    remaining_players = max(state["bookings"] - played + 1, 1)
+    slots_left = state["winners_left"]
+    won = False
+    if slots_left > 0 and secrets.randbelow(max(remaining_players, slots_left)) < slots_left:
+        claimed = await db.scratch_days.find_one_and_update(
+            {"dinner_date": body.dinner_date, "winners_count": {"$lt": cfg["winners"]}},
+            {"$inc": {"winners_count": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+        won = claimed is not None
+    status = "won" if won else "lost"
+    await db.scratch_attempts.update_one(
+        {"_id": res.inserted_id},
+        {"$set": {"status": status, "scratched_at": now_local().isoformat(),
+                  "reward": cfg["reward"] if won else None}},
+    )
+    await audit(user, f"scratch.{status}", target=body.dinner_date)
+    return {"dinner_date": body.dinner_date, "result": status, "reward": cfg["reward"] if won else None}
+
+
+@api.get("/admin/scratch/config")
+async def admin_get_scratch_config(admin: dict = Depends(get_admin_user)):
+    return await get_scratch_config()
+
+
+@api.put("/admin/scratch/config")
+async def admin_set_scratch_config(body: ScratchConfigIn, admin: dict = Depends(get_admin_user)):
+    data = {"enabled": body.enabled, "target": body.target, "winners": body.winners,
+            "reward": body.reward.strip() or "WINNER", "updated_at": now_local().isoformat()}
+    await db.scratch_config.update_one({"_id": "global"}, {"$set": data}, upsert=True)
+    await audit(admin, "scratch.config", meta={k: data[k] for k in ("enabled", "target", "winners", "reward")})
+    return await get_scratch_config()
+
+
+@api.get("/admin/scratch/overview")
+async def admin_scratch_overview(admin: dict = Depends(get_admin_user)):
+    cfg = await get_scratch_config()
+    today = now_local().date().isoformat()
+    days = []
+    for d in scratch_dates():
+        state = await scratch_day_state(d, cfg)
+        state["day_label"] = "Today" if d == today else "Tomorrow"
+        days.append(state)
+    return {"config": cfg, "days": days}
+
+
+@api.get("/admin/scratch/history")
+async def admin_scratch_history(limit: int = Query(30, ge=1, le=365), admin: dict = Depends(get_admin_user)):
+    out = []
+    async for day in db.scratch_days.find({}).sort("dinner_date", -1).limit(limit):
+        d = day["dinner_date"]
+        winners = []
+        async for a in db.scratch_attempts.find({"dinner_date": d, "status": "won"}).sort("scratched_at", 1):
+            winners.append({"name": a.get("name", ""), "employee_number": a.get("employee_number", ""),
+                            "scratched_at": a.get("scratched_at"), "reward": a.get("reward", "")})
+        scratched = await db.scratch_attempts.count_documents({"dinner_date": d, "status": {"$in": ["won", "lost"]}})
+        if not day.get("unlocked_at") and not scratched:
+            continue
+        out.append({"dinner_date": d, "unlocked_at": day.get("unlocked_at"),
+                    "scratched": scratched, "winners": winners})
+    return out
+
+
 # ---------------- Startup ----------------
 async def seed_admin():
     emp = os.environ.get("ADMIN_EMPLOYEE_NUMBER", "ADMIN")
@@ -2559,6 +2753,12 @@ async def startup():
         await db.birthdays.create_index("mmdd")
         await db.birthdays.create_index("user_id", unique=True)
         await db.special_days.create_index("mmdd", unique=True)
+    except Exception:
+        pass
+    try:
+        await db.scratch_attempts.create_index([("user_id", 1), ("dinner_date", 1)], unique=True)
+        await db.scratch_attempts.create_index("dinner_date")
+        await db.scratch_days.create_index("dinner_date", unique=True)
     except Exception:
         pass
     await db.menus.create_index([("date", 1), ("meal_type", 1)], unique=True)

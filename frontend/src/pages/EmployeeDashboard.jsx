@@ -3,6 +3,7 @@ import client, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import BirthdayModal from "@/components/BirthdayModal";
 import GreetingModal from "@/components/GreetingModal";
+import ScratchWinSection from "@/components/ScratchWinSection";
 import TopBar from "@/components/TopBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -379,6 +380,8 @@ export default function EmployeeDashboard() {
             ))}
           </div>
         )}
+
+        <ScratchWinSection refreshKey={status} />
 
         {loading || !status ? (
           <div className="flex items-center gap-2 text-muted-foreground" data-testid="dashboard-loading">

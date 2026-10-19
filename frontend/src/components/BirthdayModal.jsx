@@ -83,7 +83,7 @@ const DEFAULT_AVATAR = (name) =>
     `</svg>`
   );
 
-function Confetti() {
+export function Confetti() {
   const pieces = useMemo(() => Array.from({ length: 60 }).map((_, i) => ({
     id: i,
     left: Math.random() * 100,
