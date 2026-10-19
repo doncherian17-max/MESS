@@ -34,6 +34,25 @@ function WinnerPopup({ win, onClose }) {
   );
 }
 
+function WinnerWall({ winners }) {
+  if (!winners?.length) return null;
+  return (
+    <div className="mb-6 rounded-2xl border border-amber-300 bg-amber-50/70 px-4 py-3 flex items-center gap-3 overflow-x-auto"
+      data-testid="scratch-winner-wall">
+      <span className="overline whitespace-nowrap flex items-center gap-1.5" style={{ color: "#b45309" }}>
+        <Trophy className="h-3.5 w-3.5" /> Recent winners
+      </span>
+      {winners.map((w, i) => (
+        <Badge key={`${w.dinner_date}-${i}`} variant="outline"
+          className="rounded-full whitespace-nowrap bg-white border-amber-300 gap-1.5"
+          data-testid={`scratch-wall-winner-${i}`}>
+          {w.name} <span className="font-mono-plex text-[10px] text-muted-foreground">{fmt(w.dinner_date)}</span>
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 function CardBody({ card, onRevealed }) {
   if (card.result) {
     return (
@@ -43,19 +62,24 @@ function CardBody({ card, onRevealed }) {
     );
   }
   if (card.can_scratch) return <ScratchCard card={card} onRevealed={onRevealed} />;
-  const pct = Math.min(100, Math.round((card.bookings / card.target) * 100));
+  const showCount = card.bookings !== null && card.bookings !== undefined;
+  const pct = showCount ? Math.min(100, Math.round((card.bookings / card.target) * 100)) : 0;
   return (
     <div className="space-y-3" data-testid={`scratch-locked-${card.dinner_date}`}>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Lock className="h-4 w-4" />
         {!card.unlocked
-          ? `Unlocks when ${card.target} dinners are booked`
+          ? "Unlocks when the daily dinner booking target is reached"
           : "Book this dinner to get your scratch card"}
       </div>
-      <Progress value={pct} className="h-2" />
-      <div className="text-xs font-mono-plex text-muted-foreground" data-testid={`scratch-progress-${card.dinner_date}`}>
-        {card.bookings} / {card.target} booked
-      </div>
+      {showCount && (
+        <>
+          <Progress value={pct} className="h-2" />
+          <div className="text-xs font-mono-plex text-muted-foreground" data-testid={`scratch-progress-${card.dinner_date}`}>
+            {card.bookings} / {card.target} booked
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -84,7 +108,8 @@ export default function ScratchWinSection({ refreshKey }) {
     setTimeout(load, 1200);
   };
 
-  if (!data?.enabled || !data.cards.length) return null;
+  const hasCards = data?.enabled && data.cards.length > 0;
+  if (!hasCards && !data?.recent_winners?.length) return null;
 
   return (
     <section className="mb-10" data-testid="scratch-win-section">
@@ -92,7 +117,8 @@ export default function ScratchWinSection({ refreshKey }) {
         <Gift className="h-5 w-5 text-primary" />
         <h2 className="font-display text-2xl font-bold">Daily Scratch &amp; Win</h2>
       </div>
-      <div className="grid md:grid-cols-2 gap-6">
+      <WinnerWall winners={data.recent_winners} />
+      {hasCards && <div className="grid md:grid-cols-2 gap-6">
         {data.cards.map((c) => (
           <Card key={c.dinner_date} className="border-border" data-testid={`scratch-panel-${c.dinner_date}`}>
             <CardContent className="p-6 space-y-4">
@@ -115,7 +141,7 @@ export default function ScratchWinSection({ refreshKey }) {
             </CardContent>
           </Card>
         ))}
-      </div>
+      </div>}
       <WinnerPopup win={win} onClose={() => setWin(null)} />
     </section>
   );

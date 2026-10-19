@@ -2624,8 +2624,11 @@ async def scratch_status(user: dict = Depends(get_current_user)):
             })
             attempt = await db.scratch_attempts.find_one({"user_id": str(user["_id"]), "dinner_date": d})
             result = attempt.get("status") if attempt and attempt.get("status") in ("won", "lost") else None
+            cutoff_passed = now_local() >= compute_cutoff("dinner", parse_iso_date(d))
             cards.append({
-                **{k: state[k] for k in ("dinner_date", "bookings", "target", "max_winners", "unlocked", "winners_left")},
+                **{k: state[k] for k in ("dinner_date", "target", "max_winners", "unlocked", "winners_left")},
+                "bookings": state["bookings"] if cutoff_passed else None,
+                "cutoff_passed": cutoff_passed,
                 "winners": [{"name": w["name"]} for w in state["winners"]],
                 "day_label": "Today" if d == today else "Tomorrow",
                 "booked": bool(booked),
@@ -2633,7 +2636,12 @@ async def scratch_status(user: dict = Depends(get_current_user)):
                 "result": result,
                 "reward": attempt.get("reward") if result == "won" else None,
             })
-    return {"enabled": cfg["enabled"], "reward": cfg["reward"], "cards": cards}
+    week_start = (now_local().date() - timedelta(days=6)).isoformat()
+    recent = []
+    async for a in db.scratch_attempts.find(
+            {"status": "won", "dinner_date": {"$gte": week_start}}).sort("scratched_at", -1).limit(20):
+        recent.append({"name": a.get("name", ""), "dinner_date": a["dinner_date"]})
+    return {"enabled": cfg["enabled"], "reward": cfg["reward"], "cards": cards, "recent_winners": recent}
 
 
 @api.post("/scratch/play")
