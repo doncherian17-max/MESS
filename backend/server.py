@@ -2589,8 +2589,10 @@ async def ensure_scratch_day(dinner_date: str) -> dict:
 async def scratch_day_state(dinner_date: str, cfg: dict) -> dict:
     day = await ensure_scratch_day(dinner_date)
     bookings = await dinner_booking_count(dinner_date)
+    opens_at = compute_cutoff("dinner", parse_iso_date(dinner_date))
+    cutoff_passed = now_local() >= opens_at
     unlocked_at = day.get("unlocked_at")
-    if not unlocked_at and cfg["enabled"] and bookings >= cfg["target"]:
+    if not unlocked_at and cfg["enabled"] and cutoff_passed and bookings >= cfg["target"]:
         unlocked_at = now_local().isoformat()
         await db.scratch_days.update_one(
             {"dinner_date": dinner_date, "unlocked_at": None}, {"$set": {"unlocked_at": unlocked_at}})
@@ -2608,6 +2610,8 @@ async def scratch_day_state(dinner_date: str, cfg: dict) -> dict:
         "max_winners": cfg["winners"],
         "unlocked": bool(unlocked_at),
         "unlocked_at": unlocked_at,
+        "cutoff_passed": cutoff_passed,
+        "opens_at": opens_at.isoformat(),
         "winners_count": len(winners),
         "winners_left": max(cfg["winners"] - len(winners), 0),
         "scratched": scratched,
@@ -2629,11 +2633,10 @@ async def scratch_status(user: dict = Depends(get_current_user)):
             })
             attempt = await db.scratch_attempts.find_one({"user_id": str(user["_id"]), "dinner_date": d})
             result = attempt.get("status") if attempt and attempt.get("status") in ("won", "lost") else None
-            cutoff_passed = now_local() >= compute_cutoff("dinner", parse_iso_date(d))
             cards.append({
-                **{k: state[k] for k in ("dinner_date", "target", "max_winners", "unlocked", "winners_left")},
-                "bookings": state["bookings"] if cutoff_passed else None,
-                "cutoff_passed": cutoff_passed,
+                **{k: state[k] for k in ("dinner_date", "target", "max_winners", "unlocked", "winners_left",
+                                         "cutoff_passed", "opens_at")},
+                "bookings": state["bookings"] if state["cutoff_passed"] else None,
                 "winners": [{"name": w["name"]} for w in state["winners"]],
                 "day_label": "Today" if d == today else "Tomorrow",
                 "booked": bool(booked),
@@ -2664,8 +2667,10 @@ async def scratch_play(body: ScratchPlayIn, user: dict = Depends(get_current_use
     if not booked:
         raise HTTPException(status_code=403, detail="Book dinner for this day to get a scratch card")
     state = await scratch_day_state(body.dinner_date, cfg)
+    if not state["cutoff_passed"]:
+        raise HTTPException(status_code=400, detail="Scratching opens at 3:00 PM on the dinner day")
     if not state["unlocked"]:
-        raise HTTPException(status_code=400, detail="Booking target not reached yet")
+        raise HTTPException(status_code=400, detail="Dinner booking target was not reached")
 
     now_iso = now_local().isoformat()
     try:

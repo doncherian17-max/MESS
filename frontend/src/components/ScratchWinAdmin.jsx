@@ -75,7 +75,7 @@ function DayCard({ day }) {
           <p className="font-mono-plex text-sm">{day.dinner_date}</p>
         </div>
         <Badge className="rounded-full" variant={day.unlocked ? "default" : "outline"} data-testid={`scratch-admin-unlocked-${day.dinner_date}`}>
-          {day.unlocked ? "Unlocked" : "Locked"}
+          {day.unlocked ? "Unlocked" : day.cutoff_passed ? "Target missed" : "Opens 3:00 PM"}
         </Badge>
       </div>
       <Progress value={pct} className="h-2" />
@@ -155,7 +155,7 @@ export default function ScratchWinAdmin() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground -mt-4">
-        Once the total number of dinners booked (all quantities added up) reaches the target, everyone who booked it gets one scratch card. Winners are drawn
+        After the 3:00 PM booking deadline, if the total number of dinners booked (all quantities added up) reached the target, everyone who booked gets one scratch card to use until midnight. Winners are drawn
         randomly on the server until the daily winner limit is used up.
       </p>
       <ConfigForm cfg={overview.config} onSaved={() => load()} />

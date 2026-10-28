@@ -53,6 +53,15 @@ function WinnerWall({ winners }) {
   );
 }
 
+function lockedMessage(card) {
+  if (!card.cutoff_passed) {
+    const base = `Scratching opens at 3:00 PM on ${fmt(card.dinner_date)} if the dinner target is reached`;
+    return card.booked ? base : `${base}. Book this dinner to get a card.`;
+  }
+  if (!card.unlocked) return "The dinner booking target was not reached for this day";
+  return "You didn't book this dinner, so there's no card for you";
+}
+
 function CardBody({ card, onRevealed }) {
   if (card.result) {
     return (
@@ -68,9 +77,7 @@ function CardBody({ card, onRevealed }) {
     <div className="space-y-3" data-testid={`scratch-locked-${card.dinner_date}`}>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Lock className="h-4 w-4" />
-        {!card.unlocked
-          ? "Unlocks when the daily dinner booking target is reached"
-          : "Book this dinner to get your scratch card"}
+        {lockedMessage(card)}
       </div>
       {showCount && (
         <>
