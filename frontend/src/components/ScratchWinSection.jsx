@@ -76,7 +76,7 @@ function CardBody({ card, onRevealed }) {
         <>
           <Progress value={pct} className="h-2" />
           <div className="text-xs font-mono-plex text-muted-foreground" data-testid={`scratch-progress-${card.dinner_date}`}>
-            {card.bookings} / {card.target} booked
+            {card.bookings} / {card.target} dinners booked
           </div>
         </>
       )}

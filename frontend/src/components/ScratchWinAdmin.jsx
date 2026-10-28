@@ -80,7 +80,7 @@ function DayCard({ day }) {
       </div>
       <Progress value={pct} className="h-2" />
       <div className="grid grid-cols-3 text-center text-sm">
-        <div><div className="font-bold text-lg" data-testid={`scratch-admin-bookings-${day.dinner_date}`}>{day.bookings}/{day.target}</div><div className="text-xs text-muted-foreground">Booked</div></div>
+        <div><div className="font-bold text-lg" data-testid={`scratch-admin-bookings-${day.dinner_date}`}>{day.bookings}/{day.target}</div><div className="text-xs text-muted-foreground">Dinners booked</div></div>
         <div><div className="font-bold text-lg">{day.scratched}</div><div className="text-xs text-muted-foreground">Scratched</div></div>
         <div><div className="font-bold text-lg" data-testid={`scratch-admin-winners-${day.dinner_date}`}>{day.winners_count}/{day.max_winners}</div><div className="text-xs text-muted-foreground">Winners</div></div>
       </div>
@@ -155,7 +155,7 @@ export default function ScratchWinAdmin() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground -mt-4">
-        Once a dinner&apos;s bookings reach the target, everyone who booked it gets one scratch card. Winners are drawn
+        Once the total number of dinners booked (all quantities added up) reaches the target, everyone who booked it gets one scratch card. Winners are drawn
         randomly on the server until the daily winner limit is used up.
       </p>
       <ConfigForm cfg={overview.config} onSaved={() => load()} />

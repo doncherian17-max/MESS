@@ -2563,10 +2563,15 @@ def scratch_dates() -> List[str]:
     return [today.isoformat(), (today + timedelta(days=1)).isoformat()]
 
 
+DINNER_MATCH = lambda d: {"meal_date": d, "meal_type": "dinner", "status": {"$ne": "emergency_cancelled"}}  # noqa: E731
+
+
 async def dinner_booking_count(dinner_date: str) -> int:
-    return await db.bookings.count_documents({
-        "meal_date": dinner_date, "meal_type": "dinner", "status": {"$ne": "emergency_cancelled"},
-    })
+    rows = await db.bookings.aggregate([
+        {"$match": DINNER_MATCH(dinner_date)},
+        {"$group": {"_id": None, "qty": {"$sum": {"$ifNull": ["$quantity", 1]}}}},
+    ]).to_list(1)
+    return rows[0]["qty"] if rows else 0
 
 
 async def ensure_scratch_day(dinner_date: str) -> dict:
@@ -2672,7 +2677,8 @@ async def scratch_play(body: ScratchPlayIn, user: dict = Depends(get_current_use
         raise HTTPException(status_code=409, detail="You have already scratched this card")
 
     played = await db.scratch_attempts.count_documents({"dinner_date": body.dinner_date})
-    remaining_players = max(state["bookings"] - played + 1, 1)
+    persons = await db.bookings.count_documents(DINNER_MATCH(body.dinner_date))
+    remaining_players = max(persons - played + 1, 1)
     slots_left = state["winners_left"]
     won = False
     if slots_left > 0 and secrets.randbelow(max(remaining_players, slots_left)) < slots_left:
